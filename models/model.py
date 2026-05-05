@@ -28,7 +28,7 @@ N_DIFFICULTIES = 5   # 0..4
 # ─────────────────────────────────────────────
 
 class SinusoidalPositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 2048, dropout: float = 0.1):
+    def __init__(self, d_model: int, max_len: int = 8192, dropout: float = 0.1):
         super().__init__()
         self.dropout = nn.Dropout(dropout)
         pe = torch.zeros(max_len, d_model)
