@@ -32,65 +32,108 @@ def parse_sm_file(sm_path: str) -> Dict:
         match = re.search(rf'#{tag}:([^;]*);', content, re.DOTALL | re.IGNORECASE)
         return match.group(1).strip() if match else ''
 
-    bpm_str = get_tag('BPMS')
+    bpm_str    = get_tag('BPMS')
     offset_str = get_tag('OFFSET')
-    title = get_tag('TITLE')
+    title      = get_tag('TITLE')
 
     # Parse BPMs: "beat=bpm,beat=bpm,..."
     bpms = []
     for part in bpm_str.split(','):
         part = part.strip()
         if '=' in part:
-            beat, bpm = part.split('=')
-            bpms.append((float(beat), float(bpm)))
+            try:
+                beat, bpm = part.split('=', 1)
+                bpms.append((float(beat.strip()), float(bpm.strip())))
+            except ValueError:
+                continue
 
-    offset = float(offset_str) if offset_str else 0.0
+    offset = 0.0
+    try:
+        offset = float(offset_str) if offset_str else 0.0
+    except ValueError:
+        pass
 
-    # Parse all NOTES sections
-    notes_blocks = re.findall(
-        r'#NOTES:\s*(.*?)\s*;',
-        content, re.DOTALL | re.IGNORECASE
-    )
-
+    # Parse NOTES blocks directly from raw content so we don't lose the ';' boundary.
+    # Each block starts at '#NOTES:' and ends at the next ';' that is NOT inside note rows.
+    # We use a raw split approach: find every '#NOTES:' and read until ';'
     charts = []
-    for block in notes_blocks:
-        lines = [l.strip() for l in block.split('\n') if l.strip()]
-        # First 5 lines: chart_type, desc, difficulty, meter, radar
-        if len(lines) < 6:
-            continue
-        chart_type = lines[0].rstrip(':').strip()
-        difficulty = lines[2].rstrip(':').strip()
-        meter = int(lines[3].rstrip(':').strip()) if lines[3].rstrip(':').strip().isdigit() else 0
+    for m in re.finditer(r'#NOTES:', content, re.IGNORECASE):
+        start = m.end()
+        end   = content.find(';', start)
+        if end == -1:
+            end = len(content)
+        block = content[start:end]
 
-        # Remaining lines are the note data
-        note_lines = lines[5:]
-        measures = []
+        # Split into raw lines, keep blank lines as delimiters (they separate measures in some packs)
+        raw_lines = block.split('\n')
+
+        # The first 5 non-empty lines (stripped) are the header fields:
+        #   chart_type, description, difficulty, meter, radar
+        header = []
+        header_indices = []
+        for i, line in enumerate(raw_lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith('//'):
+                header.append(stripped)
+                header_indices.append(i)
+            if len(header) == 5:
+                break
+
+        if len(header) < 5:
+            continue
+
+        chart_type = header[0].rstrip(':').strip()
+        difficulty = header[2].rstrip(':').strip()
+        meter_str  = header[3].rstrip(':').strip()
+        meter      = int(meter_str) if meter_str.lstrip('-').isdigit() else 0
+
+        # Everything after the 5th header line is note data
+        note_start = header_indices[4] + 1
+        note_lines = raw_lines[note_start:]
+
+        measures        = []
         current_measure = []
         for line in note_lines:
-            if line.startswith('//'):
+            stripped = line.strip()
+
+            # Skip comments
+            if stripped.startswith('//'):
                 continue
-            if line == ',':
-                measures.append(current_measure)
-                current_measure = []
-            elif line == ';' or line == '':
+
+            # Comma = end of measure
+            if stripped == ',':
                 if current_measure:
                     measures.append(current_measure)
-                break
-            else:
-                # Keep only the first 4 chars (LDUR columns)
-                row = line[:ARROW_COLS].ljust(ARROW_COLS, '0')
+                current_measure = []
+                continue
+
+            # Skip empty lines
+            if not stripped:
+                continue
+
+            # Valid note row: must be 4+ chars of 0/1/2/3/4/M/F/K
+            # Reject lines that look like header artifacts
+            if len(stripped) >= 4 and re.match(r'^[0-9MFKLmfkl]{4}', stripped):
+                row = stripped[:ARROW_COLS].ljust(ARROW_COLS, '0')
                 current_measure.append(row)
+
+        # Don't forget the last measure (no trailing comma in some files)
+        if current_measure:
+            measures.append(current_measure)
+
+        if not measures:
+            continue
 
         charts.append({
             'chart_type': chart_type,
             'difficulty': difficulty,
-            'meter': meter,
-            'measures': measures,
+            'meter':      meter,
+            'measures':   measures,
         })
 
     return {
-        'title': title,
-        'bpms': bpms,
+        'title':  title,
+        'bpms':   bpms,
         'offset': offset,
         'charts': charts,
     }
