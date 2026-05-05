@@ -12,6 +12,7 @@ Architecture:
 """
 
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -275,7 +276,6 @@ def generate_chart(
         step_mask   : (T,) bool — where steps occur
         arrow_preds : (T, 4) int — arrow combination at each active step
     """
-    import numpy as np
     model.eval()
     model.to(device)
     X = X.to(device)
