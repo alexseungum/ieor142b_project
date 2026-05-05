@@ -1,3 +1,5 @@
+Note: This README is AI generated.
+
 # DDR Chart Generation from Audio
 
 Automatic Dance Dance Revolution chart generation using a CNN + Transformer neural network. Given any audio file as input, the model outputs a sequence of arrow events (left, right, up, down) that form a playable, music-synchronized DDR chart.
