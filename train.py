@@ -128,7 +128,7 @@ def train(args):
 
     # Use AMP only on CUDA
     use_amp = (device.type == 'cuda')
-    scaler  = torch.cuda.amp.GradScaler() if use_amp else None
+    scaler  = torch.amp.GradScaler('cuda') if use_amp else None
 
     model = DDRTransformer(
         d_model=args.d_model,
