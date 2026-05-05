@@ -96,24 +96,24 @@ def build_html(chart_data: dict, audio_data_uri: str = None) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — DDR Chart</title>
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {{
-  --red:    #ff3a3a;
-  --green:  #00e676;
-  --blue:   #2979ff;
-  --yellow: #ffea00;
-  --bg:     #080810;
-  --panel:  #0e0e1a;
-  --border: #1e1e3a;
-  --text:   #c8c8e8;
-  --dim:    #404060;
+  --red:    #ff5555;
+  --green:  #50fa7b;
+  --blue:   #6ba3ff;
+  --yellow: #f1c40f;
+  --bg:     #1a1a1a;
+  --panel:  #222222;
+  --border: #333333;
+  --text:   #eeeeee;
+  --dim:    #888888;
 }}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{
   background: var(--bg);
   color: var(--text);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Inter', sans-serif;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -121,28 +121,17 @@ body {{
   padding: 24px 16px;
   overflow-x: hidden;
 }}
-body::before {{
-  content:'';
-  position:fixed;
-  inset:0;
-  background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px);
-  pointer-events:none;
-  z-index:999;
-}}
 .header {{ text-align:center; margin-bottom:20px; }}
 .title {{
-  font-family:'Orbitron',sans-serif;
-  font-weight:900;
-  font-size:clamp(1.2em,4vw,2em);
-  letter-spacing:0.05em;
-  background:linear-gradient(135deg,#fff 30%,#8080ff);
-  -webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;
-  background-clip:text;
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.4em, 4vw, 2em);
+  letter-spacing: -0.02em;
+  color: #ffffff;
 }}
 .meta-row {{
   display:flex; gap:20px; justify-content:center;
-  margin-top:6px; font-size:0.78em; letter-spacing:0.1em; color:var(--dim);
+  margin-top:6px; font-size:0.78em; letter-spacing:0.05em; color:var(--dim);
 }}
 .meta-row span {{ color:var(--text); }}
 .controls {{
@@ -150,77 +139,75 @@ body::before {{
   margin-bottom:20px; flex-wrap:wrap; justify-content:center;
 }}
 .btn {{
-  font-family:'Orbitron',sans-serif;
-  font-size:0.7em; font-weight:700; letter-spacing:0.15em;
-  padding:10px 24px; border:1px solid var(--border);
-  background:var(--panel); color:var(--text);
-  cursor:pointer; text-transform:uppercase;
-  clip-path:polygon(8px 0%,100% 0%,calc(100% - 8px) 100%,0% 100%);
-  transition:all 0.15s;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.8em; font-weight: 600; letter-spacing: 0.03em;
+  padding: 8px 20px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text);
+  cursor: pointer; border-radius: 6px;
+  transition: all 0.15s;
 }}
-.btn:hover {{ background:#1a1a30; border-color:#4040aa; }}
-.btn.playing {{ background:var(--red); border-color:var(--red); color:#fff; }}
+.btn:hover {{ background:#2a2a2a; border-color:#555; }}
+.btn.playing {{ background:#ffffff; border-color:#ffffff; color:#1a1a1a; }}
 .speed-wrap {{
   display:flex; align-items:center; gap:8px;
-  font-size:0.75em; letter-spacing:0.1em; color:var(--dim);
+  font-size:0.78em; color:var(--dim);
 }}
 .speed-wrap span {{ color:var(--text); min-width:28px; }}
-input[type=range] {{ width:90px; accent-color:var(--blue); cursor:pointer; }}
+input[type=range] {{ width:90px; accent-color:#ffffff; cursor:pointer; }}
 .main {{
   display:flex; gap:20px; align-items:flex-start;
   flex-wrap:wrap; justify-content:center;
 }}
 .stage-wrap {{ display:flex; flex-direction:column; align-items:center; gap:10px; }}
-canvas {{ border:1px solid var(--border); display:block; }}
+canvas {{ border:1px solid var(--border); border-radius:4px; display:block; }}
 .progress-track {{
-  width:300px; height:4px; background:var(--border); border-radius:2px; overflow:hidden;
+  width:300px; height:3px; background:var(--border); border-radius:2px; overflow:hidden;
 }}
 .progress-fill {{
   height:100%; width:0%;
-  background:linear-gradient(90deg,var(--blue),var(--red));
+  background:#ffffff;
   transition:width 0.05s linear;
 }}
-.beat-label {{ font-size:0.7em; letter-spacing:0.15em; color:var(--dim); }}
+.beat-label {{ font-size:0.72em; color:var(--dim); letter-spacing:0.05em; }}
 .panel {{
-  width:200px; background:var(--panel);
-  border:1px solid var(--border); padding:16px;
-  font-size:0.75em; letter-spacing:0.08em;
+  width:180px; background:var(--panel);
+  border:1px solid var(--border); border-radius:6px; padding:16px;
+  font-size:0.78em;
 }}
 .panel-title {{
-  font-family:'Orbitron',sans-serif; font-size:0.65em; font-weight:700;
-  letter-spacing:0.2em; color:var(--dim); margin-bottom:14px; text-transform:uppercase;
+  font-size:0.68em; font-weight:600;
+  letter-spacing:0.1em; color:var(--dim);
+  margin-bottom:12px; text-transform:uppercase;
 }}
 .panel-row {{
-  display:flex; justify-content:space-between; margin-bottom:10px; color:var(--dim);
+  display:flex; justify-content:space-between;
+  margin-bottom:9px; color:var(--dim);
 }}
-.panel-row span:last-child {{
-  color:var(--text); font-family:'Orbitron',sans-serif; font-size:0.9em;
-}}
-.divider {{ border:none; border-top:1px solid var(--border); margin:14px 0; }}
+.panel-row span:last-child {{ color:var(--text); font-weight:600; }}
+.divider {{ border:none; border-top:1px solid var(--border); margin:12px 0; }}
 .stat-big {{
-  font-family:'Orbitron',sans-serif; font-size:1.6em; font-weight:900;
+  font-size:1.8em; font-weight:700;
   color:#fff; text-align:center; margin:4px 0 2px;
 }}
 .stat-label {{
   font-size:0.65em; color:var(--dim); text-align:center;
-  letter-spacing:0.15em; text-transform:uppercase;
+  letter-spacing:0.1em; text-transform:uppercase;
 }}
 .beat-dots {{ display:flex; justify-content:center; gap:6px; margin-top:14px; }}
 .dot {{
-  width:8px; height:8px; border-radius:50%; background:var(--border);
-  transition:background 0.05s,transform 0.05s;
+  width:7px; height:7px; border-radius:50%; background:var(--border);
+  transition:background 0.05s, transform 0.05s;
 }}
 .dot.on {{ background:#fff; transform:scale(1.4); }}
 .diff-badge {{
-  display:inline-block; font-family:'Orbitron',sans-serif;
-  font-size:0.6em; font-weight:700; letter-spacing:0.2em;
-  padding:2px 8px; border-radius:2px;
+  display:inline-block; font-size:0.65em; font-weight:600;
+  letter-spacing:0.1em; padding:2px 8px; border-radius:4px;
 }}
-.diff-BEGINNER  {{ background:#1a3a1a; color:#00e676; border:1px solid #00e676; }}
-.diff-EASY      {{ background:#1a3a1a; color:#00e676; border:1px solid #00e676; }}
-.diff-MEDIUM    {{ background:#3a2a00; color:#ffea00; border:1px solid #ffea00; }}
-.diff-HARD      {{ background:#3a1a00; color:#ff9100; border:1px solid #ff9100; }}
-.diff-CHALLENGE {{ background:#3a0000; color:#ff3a3a; border:1px solid #ff3a3a; }}
+.diff-BEGINNER  {{ background:#1a3a1a; color:#50fa7b; border:1px solid #50fa7b44; }}
+.diff-EASY      {{ background:#1a3a1a; color:#50fa7b; border:1px solid #50fa7b44; }}
+.diff-MEDIUM    {{ background:#2a2500; color:#f1c40f; border:1px solid #f1c40f44; }}
+.diff-HARD      {{ background:#2a1800; color:#ff9100; border:1px solid #ff910044; }}
+.diff-CHALLENGE {{ background:#2a0000; color:#ff5555; border:1px solid #ff555544; }}
 </style>
 </head>
 <body>
@@ -335,11 +322,11 @@ function drawReceptor(col) {{
 }}
 
 function draw() {{
-  ctx.fillStyle = '#080810';
+  ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, W, H);
 
   // lane lines
-  ctx.strokeStyle = '#1e1e3a'; ctx.lineWidth = 1;
+  ctx.strokeStyle = '#333333'; ctx.lineWidth = 1;
   for (let c = 0; c <= 4; c++) {{
     const lx = 14 + c * 65 - 1;
     ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx, H); ctx.stroke();
@@ -352,7 +339,7 @@ function draw() {{
     const gy = eventY(b);
     if (gy < -2 || gy > H + 2) continue;
     const isMeasure = Math.round(b / beatSec) % 4 === 0;
-    ctx.strokeStyle = isMeasure ? '#2a2a50' : '#111128';
+    ctx.strokeStyle = isMeasure ? '#3a3a3a' : '#272727';
     ctx.lineWidth = isMeasure ? 1.5 : 0.5;
     ctx.beginPath(); ctx.moveTo(14, gy); ctx.lineTo(W - 14, gy); ctx.stroke();
   }}
