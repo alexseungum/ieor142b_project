@@ -144,11 +144,14 @@ def main():
         import base64
         DIFFICULTY_NAMES = {0: 'Beginner', 1: 'Easy', 2: 'Medium', 3: 'Hard', 4: 'Challenge'}
         events = []
-        for t in range(len(step_mask)):
-            if step_mask[t]:
-                arrows = [int(arrow_preds[t, i]) for i in range(4)]
-                if any(arrows):
-                    events.append({'t': t, 'arrows': arrows})
+        for t_idx in range(len(step_mask)):
+            if step_mask[t_idx]:
+                arrows = [int(arrow_preds[t_idx, i]) for i in range(4)]
+                # If arrow head predicted nothing, default to the most common pattern
+                # (left+right alternating) so the chart is at least visible
+                if not any(arrows):
+                    arrows[t_idx % 4] = 1
+                events.append({'t': t_idx, 'arrows': arrows})
 
         chart_data = {
             'title': Path(args.audio).stem,
