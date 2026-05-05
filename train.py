@@ -169,7 +169,7 @@ def train(args):
 
         # Skip stage if dataset has no samples at this difficulty
         # (e.g. pack has no Beginner charts — start from Easy instead)
-        if len(train_loader.dataset) == 0:
+        if train_loader is None or val_loader is None:
             print(f"  No samples at difficulty <= {stage}, skipping stage.")
             continue
 

@@ -14,6 +14,20 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 from utils.data_utils import build_sample, difficulty_to_int
 
+
+def _process_song(args):
+    """Top-level worker function for multiprocessing — processes one song across all difficulties."""
+    audio_path, sm_path = args
+    samples = []
+    for diff_str in ['beginner', 'easy', 'medium', 'hard', 'challenge']:
+        try:
+            sample = build_sample(audio_path, sm_path, difficulty_filter=diff_str)
+            if sample is not None:
+                samples.append(sample)
+        except Exception:
+            pass
+    return samples
+
 # ─────────────────────────────────────────────
 # DATASET
 # ─────────────────────────────────────────────
@@ -45,12 +59,24 @@ class DDRDataset(Dataset):
             with open(cache_path, 'rb') as f:
                 all_samples = pickle.load(f)
         else:
-            all_samples = self._build_from_root(data_root)
-            if cache_path:
-                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-                with open(cache_path, 'wb') as f:
-                    pickle.dump(all_samples, f)
-                print(f"Saved dataset cache to {cache_path}")
+            # Use a shared base cache (all difficulties, all songs) so audio
+            # processing only happens once across all curriculum stages
+            base_cache = cache_path.replace(
+                os.path.basename(cache_path),
+                f'base_{split}.pkl'
+            ) if cache_path else None
+
+            if base_cache and os.path.exists(base_cache):
+                print(f"Loading base cache from {base_cache}")
+                with open(base_cache, 'rb') as f:
+                    all_samples = pickle.load(f)
+            else:
+                all_samples = self._build_from_root(data_root)
+                if base_cache:
+                    os.makedirs(os.path.dirname(base_cache), exist_ok=True)
+                    with open(base_cache, 'wb') as f:
+                        pickle.dump(all_samples, f)
+                    print(f"Saved base cache to {base_cache}")
 
         # Train/val split by song (not by chunk) to avoid leakage
         rng = np.random.default_rng(seed)
@@ -83,9 +109,9 @@ class DDRDataset(Dataset):
     def _build_from_root(self, data_root: str) -> List[dict]:
         """
         Walk data_root recursively, find all folders containing both a .sm and audio file.
-        Works regardless of how many levels deep the pack folders are.
+        Processes songs in parallel using multiprocessing for faster cache building.
         """
-        samples = []
+        from multiprocessing import Pool, cpu_count
         root = Path(data_root)
         audio_exts = {'.ogg', '.mp3', '.wav'}
 
@@ -94,21 +120,23 @@ class DDRDataset(Dataset):
         song_dirs = sorted({sm.parent for sm in all_sm})
         print(f"Found {len(song_dirs)} song directories")
 
+        # Build list of (audio_path, sm_path) pairs
+        pairs = []
         for song_dir in song_dirs:
-            sm_files   = list(song_dir.glob('*.sm'))
+            sm_files    = list(song_dir.glob('*.sm'))
             audio_files = [f for f in song_dir.iterdir() if f.suffix.lower() in audio_exts]
+            if sm_files and audio_files:
+                pairs.append((str(audio_files[0]), str(sm_files[0])))
 
-            if not sm_files or not audio_files:
-                continue
+        # Process in parallel — use min(8, cpu_count) workers
+        n_workers = min(8, cpu_count())
+        print(f"Processing {len(pairs)} songs with {n_workers} workers...")
 
-            sm_path    = str(sm_files[0])
-            audio_path = str(audio_files[0])
-
-            # Build one sample per difficulty level present
-            for diff_str in ['beginner', 'easy', 'medium', 'hard', 'challenge']:
-                sample = build_sample(audio_path, sm_path, difficulty_filter=diff_str)
-                if sample is not None:
-                    samples.append(sample)
+        samples = []
+        with Pool(n_workers) as pool:
+            results = pool.map(_process_song, pairs)
+        for song_samples in results:
+            samples.extend(song_samples)
 
         print(f"Built {len(samples)} song-difficulty samples")
         return samples
@@ -153,9 +181,9 @@ def get_curriculum_loaders(
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True, drop_last=True
-    )
+    ) if len(train_ds) > 0 else None
     val_loader = DataLoader(
         val_ds, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True
-    )
+    ) if len(val_ds) > 0 else None
     return train_loader, val_loader
