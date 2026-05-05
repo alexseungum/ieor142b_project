@@ -82,24 +82,26 @@ class DDRDataset(Dataset):
 
     def _build_from_root(self, data_root: str) -> List[dict]:
         """
-        Walk data_root, find all pairs of (audio, .sm) files.
-        Expects structure: data_root/<song_name>/<song_name>.sm + audio file
+        Walk data_root recursively, find all folders containing both a .sm and audio file.
+        Works regardless of how many levels deep the pack folders are.
         """
         samples = []
         root = Path(data_root)
         audio_exts = {'.ogg', '.mp3', '.wav'}
 
-        song_dirs = sorted([d for d in root.iterdir() if d.is_dir()])
+        # Find every folder that has at least one .sm file
+        all_sm = list(root.rglob('*.sm'))
+        song_dirs = sorted({sm.parent for sm in all_sm})
         print(f"Found {len(song_dirs)} song directories")
 
         for song_dir in song_dirs:
-            sm_files = list(song_dir.glob('*.sm'))
+            sm_files   = list(song_dir.glob('*.sm'))
             audio_files = [f for f in song_dir.iterdir() if f.suffix.lower() in audio_exts]
 
             if not sm_files or not audio_files:
                 continue
 
-            sm_path = str(sm_files[0])
+            sm_path    = str(sm_files[0])
             audio_path = str(audio_files[0])
 
             # Build one sample per difficulty level present

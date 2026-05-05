@@ -167,6 +167,12 @@ def train(args):
             curriculum_stage=stage,
         )
 
+        # Skip stage if dataset has no samples at this difficulty
+        # (e.g. pack has no Beginner charts — start from Easy instead)
+        if len(train_loader.dataset) == 0:
+            print(f"  No samples at difficulty <= {stage}, skipping stage.")
+            continue
+
         # Fresh optimizer + scheduler per stage (warm restart)
         optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs_per_stage, eta_min=1e-6)
