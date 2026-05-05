@@ -137,10 +137,29 @@ def main():
     import shutil
     shutil.copy(args.audio, f"{args.output}/{audio_name}")
 
-    # Generate visualizer HTML
+    # Generate visualizer HTML directly from arrays (bypass sm round-trip)
     print("Generating visualizer...")
     try:
-        chart_data = build_chart_json(sm_path)
+        import json as _json
+        DIFFICULTY_NAMES = {0: 'Beginner', 1: 'Easy', 2: 'Medium', 3: 'Hard', 4: 'Challenge'}
+        events = []
+        for t in range(len(step_mask)):
+            if step_mask[t]:
+                arrows = [int(arrow_preds[t, i]) for i in range(4)]
+                if any(arrows):
+                    events.append({'t': t, 'arrows': arrows})
+
+        chart_data = {
+            'title': Path(args.audio).stem,
+            'bpm': bpm,
+            'offset': 0.0,
+            'difficulty': DIFFICULTY_NAMES.get(args.difficulty, 'Medium'),
+            'meter': args.difficulty * 3 + 3,
+            'total_steps': int(step_mask.sum()),
+            'total_timesteps': len(step_mask),
+            'events': events,
+        }
+        print(f"  Visualizer: {chart_data['total_steps']} steps, {len(events)} events")
         html = build_html(chart_data)
         viz_path = f"{args.output}/visualizer.html"
         with open(viz_path, 'w') as f:
