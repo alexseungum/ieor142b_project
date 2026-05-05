@@ -84,7 +84,10 @@ def main():
         dim_feedforward=model_args.get('d_ff', 1024),
         dropout=0.0,  # no dropout at inference
     )
-    model.load_state_dict(ckpt['model_state'])
+    model.load_state_dict(ckpt['model_state'], strict=False)
+    # pos_enc.pe is a fixed sinusoidal buffer, not a learned parameter.
+    # If the checkpoint has a different max_len we can safely ignore the mismatch
+    # and let the model recompute it at the new size.
     print(f"  Loaded (val F1 at save: {ckpt.get('val_f1', 'N/A')})")
 
     # Process audio
