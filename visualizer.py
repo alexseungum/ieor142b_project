@@ -59,13 +59,36 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     }
 
 
-def build_html(chart_data: dict) -> str:
+def build_html(chart_data: dict, audio_data_uri: str = None) -> str:
     chart_json = json.dumps(chart_data, indent=2)
     title = chart_data['title']
     diff  = chart_data['difficulty'].upper()
     meter = chart_data['meter']
     bpm   = chart_data['bpm']
     steps = chart_data['total_steps']
+
+    # Audio element — embedded as base64 if provided, otherwise no audio
+    if audio_data_uri:
+        audio_tag = f'<audio id="audio" src="{audio_data_uri}" preload="auto"></audio>'
+        audio_js = """
+  const audio = document.getElementById('audio');
+  // Sync audio with playback
+  function startAudio() {
+    audio.currentTime = t;
+    audio.play().catch(() => {});
+  }
+  function pauseAudio() { audio.pause(); }
+  function resetAudio() { audio.pause(); audio.currentTime = 0; }
+"""
+        audio_play_call   = "startAudio();"
+        audio_pause_call  = "pauseAudio();"
+        audio_reset_call  = "resetAudio();"
+    else:
+        audio_tag = ""
+        audio_js  = ""
+        audio_play_call  = ""
+        audio_pause_call = ""
+        audio_reset_call = ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -201,6 +224,7 @@ canvas {{ border:1px solid var(--border); display:block; }}
 </style>
 </head>
 <body>
+{audio_tag}
 
 <div class="header">
   <div class="title">{title}</div>
@@ -250,6 +274,7 @@ canvas {{ border:1px solid var(--border); display:block; }}
 
 <script>
 const CHART = {chart_json};
+{audio_js}
 
 const W = 300, H = 520;
 const COL_XS = [14, 79, 144, 209];
@@ -390,15 +415,19 @@ function togglePlay() {{
   const btn = document.getElementById('btn-play');
   if (playing) {{
     btn.textContent = '⏸ PAUSE'; btn.classList.add('playing');
-    lastTs = null; requestAnimationFrame(frame);
+    lastTs = null;
+    {audio_play_call}
+    requestAnimationFrame(frame);
   }} else {{
     btn.textContent = '▶ PLAY'; btn.classList.remove('playing');
+    {audio_pause_call}
   }}
 }}
 
 function resetViz() {{
   playing = false; t = 0; combo = 0; hits = 0;
   firedSet.clear(); recFlash = [0,0,0,0];
+  {audio_reset_call}
   document.getElementById('btn-play').textContent = '▶ PLAY';
   document.getElementById('btn-play').classList.remove('playing');
   document.getElementById('stat-combo').textContent = '0';

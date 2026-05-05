@@ -141,6 +141,7 @@ def main():
     print("Generating visualizer...")
     try:
         import json as _json
+        import base64
         DIFFICULTY_NAMES = {0: 'Beginner', 1: 'Easy', 2: 'Medium', 3: 'Hard', 4: 'Challenge'}
         events = []
         for t in range(len(step_mask)):
@@ -159,8 +160,17 @@ def main():
             'total_timesteps': len(step_mask),
             'events': events,
         }
+
+        # Embed audio as base64 so the HTML is fully self-contained
+        suffix = Path(args.audio).suffix.lower()
+        mime_map = {'.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav'}
+        audio_mime = mime_map.get(suffix, 'audio/mpeg')
+        with open(args.audio, 'rb') as af:
+            audio_b64 = base64.b64encode(af.read()).decode('utf-8')
+        audio_data_uri = f"data:{audio_mime};base64,{audio_b64}"
+
         print(f"  Visualizer: {chart_data['total_steps']} steps, {len(events)} events")
-        html = build_html(chart_data)
+        html = build_html(chart_data, audio_data_uri=audio_data_uri)
         viz_path = f"{args.output}/visualizer.html"
         with open(viz_path, 'w') as f:
             f.write(html)
