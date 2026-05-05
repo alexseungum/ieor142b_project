@@ -366,8 +366,8 @@ function draw() {{
   for (let c = 0; c < 4; c++) drawReceptor(c);
 
   // arrows — only those in visible window
-  const visTop    = t - (HIT_Y + ARROW_SIZE * 2) / pps();
-  const visBottom = t + (H - HIT_Y + ARROW_SIZE) / pps();
+  const visTop    = t - ARROW_SIZE / pps();
+  const visBottom = t + (H + ARROW_SIZE * 2) / pps();
 
   for (const ev of events) {{
     if (ev.t_sec < visTop)    continue;
