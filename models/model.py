@@ -12,15 +12,15 @@ Architecture:
 """
 
 import math
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
-
-N_MELS        = 80
-CONTEXT_LEN   = 15   # context*2+1 frames per timestep (context=7)
-N_DIFFICULTIES = 5   # 0..4
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES
 
 
 # ─────────────────────────────────────────────

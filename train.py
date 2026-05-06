@@ -22,6 +22,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from dataset import get_curriculum_loaders
 from models.model import DDRTransformer, DDRLoss
+from config import (
+    D_MODEL, NHEAD, N_LAYERS, D_FF, DROPOUT,
+    BATCH_SIZE, LR, WEIGHT_DECAY, EPOCHS_PER_STAGE,
+    PATIENCE, POS_WEIGHT, LABEL_SMOOTHING, NUM_WORKERS, CURRICULUM_START,
+)
 
 
 # ─────────────────────────────────────────────
@@ -239,20 +244,20 @@ def parse_args():
     p.add_argument('--data_root',        type=str,   default='data/ddc',       help='Path to unpacked DDC dataset')
     p.add_argument('--cache_dir',        type=str,   default='data/cache',     help='Where to cache processed samples')
     p.add_argument('--checkpoint_dir',   type=str,   default='checkpoints',    help='Where to save model checkpoints')
-    p.add_argument('--epochs_per_stage', type=int,   default=30,               help='Training epochs per curriculum stage')
-    p.add_argument('--batch_size',       type=int,   default=32)
-    p.add_argument('--lr',               type=float, default=3e-4)
-    p.add_argument('--weight_decay',     type=float, default=1e-4)
-    p.add_argument('--d_model',          type=int,   default=256)
-    p.add_argument('--nhead',            type=int,   default=8)
-    p.add_argument('--n_layers',         type=int,   default=4)
-    p.add_argument('--d_ff',             type=int,   default=1024)
-    p.add_argument('--dropout',          type=float, default=0.1)
-    p.add_argument('--pos_weight',       type=float, default=5.0,              help='Positive class weight for step BCE loss')
-    p.add_argument('--label_smoothing',  type=float, default=0.1)
-    p.add_argument('--patience',         type=int,   default=10,               help='Early stopping patience within each stage')
-    p.add_argument('--num_workers',      type=int,   default=2)
-    p.add_argument('--curriculum_start', type=int,   default=0,                help='Start at this difficulty stage (0=beginner)')
+    p.add_argument('--epochs_per_stage', type=int,   default=EPOCHS_PER_STAGE, help='Training epochs per curriculum stage')
+    p.add_argument('--batch_size',       type=int,   default=BATCH_SIZE)
+    p.add_argument('--lr',               type=float, default=LR)
+    p.add_argument('--weight_decay',     type=float, default=WEIGHT_DECAY)
+    p.add_argument('--d_model',          type=int,   default=D_MODEL)
+    p.add_argument('--nhead',            type=int,   default=NHEAD)
+    p.add_argument('--n_layers',         type=int,   default=N_LAYERS)
+    p.add_argument('--d_ff',             type=int,   default=D_FF)
+    p.add_argument('--dropout',          type=float, default=DROPOUT)
+    p.add_argument('--pos_weight',       type=float, default=POS_WEIGHT,       help='Positive class weight for step BCE loss')
+    p.add_argument('--label_smoothing',  type=float, default=LABEL_SMOOTHING)
+    p.add_argument('--patience',         type=int,   default=PATIENCE,         help='Early stopping patience within each stage')
+    p.add_argument('--num_workers',      type=int,   default=NUM_WORKERS)
+    p.add_argument('--curriculum_start', type=int,   default=CURRICULUM_START, help='Start at this difficulty stage (0=beginner)')
     return p.parse_args()
 
 

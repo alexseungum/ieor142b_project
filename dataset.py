@@ -12,6 +12,7 @@ from typing import List, Optional, Tuple
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
+from config import SEQ_LEN as _SEQ_LEN
 from utils.data_utils import build_sample, difficulty_to_int
 
 
@@ -40,7 +41,7 @@ class DDRDataset(Dataset):
         y      : (SEQ_LEN, 4)                     float32
         diff   : ()                               int64  (scalar)
     """
-    SEQ_LEN = 1024  # timesteps per training chunk
+    SEQ_LEN = _SEQ_LEN  # timesteps per training chunk (set in config.py)
 
     def __init__(
         self,

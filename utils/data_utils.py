@@ -13,6 +13,11 @@ from typing import List, Tuple, Dict, Optional
 import librosa
 import librosa.display
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import SR, HOP_LENGTH, N_FFT, N_MELS, CONTEXT_FRAMES
+
 # ─────────────────────────────────────────────
 # SM FILE PARSING
 # ─────────────────────────────────────────────
@@ -175,10 +180,7 @@ def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = 16
 # AUDIO FEATURE EXTRACTION
 # ─────────────────────────────────────────────
 
-SR = 22050          # sample rate
-HOP_LENGTH = 512    # hop size for STFT
-N_MELS = 80         # mel bands
-N_FFT = 2048
+# Audio constants imported from config.py
 
 def load_audio(audio_path: str, sr: int = SR) -> Tuple[np.ndarray, int]:
     y, sr_ = librosa.load(audio_path, sr=sr, mono=True)
@@ -246,7 +248,7 @@ def frames_to_beats(bpms: List[Tuple[float, float]], offset: float,
 # DATASET BUILDER
 # ─────────────────────────────────────────────
 
-CONTEXT_FRAMES = 7   # frames of context on each side of current frame
+# CONTEXT_FRAMES imported from config.py
 
 def build_sample(
     audio_path: str,
