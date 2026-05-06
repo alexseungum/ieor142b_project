@@ -40,7 +40,7 @@ class DDRDataset(Dataset):
         y      : (SEQ_LEN, 4)                     float32
         diff   : ()                               int64  (scalar)
     """
-    SEQ_LEN = 256   # timesteps per training chunk
+    SEQ_LEN = 1024  # timesteps per training chunk
 
     def __init__(
         self,
