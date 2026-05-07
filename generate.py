@@ -27,19 +27,19 @@ SUBDIVISION = 16
 CONTEXT = CONTEXT_FRAMES
 
 
-def audio_to_model_input(audio_path: str, subdivision: int = SUBDIVISION,
+def audio_to_model_input(audio_path: str, bpm: float, subdivision: int = SUBDIVISION,
                           context: int = CONTEXT) -> torch.Tensor:
     """
     Load audio and convert to model input tensor.
+    T_beats is derived from actual audio duration + BPM so generation stops at song end.
     Returns: (1, T, context*2+1, N_MELS)
     """
     y, sr = load_audio(audio_path)
     mel = extract_mel_spectrogram(y, sr)  # (N_MELS, T_frames)
 
     T_frames = mel.shape[1]
-    # Estimate number of beat-subdivisions from audio length
-    # We'll just use T_frames // 4 as a rough estimate
-    T_beats = T_frames // 4
+    duration_sec = len(y) / sr
+    T_beats = int(duration_sec * (bpm / 60) * subdivision)
 
     frame_indices = np.round(np.linspace(0, T_frames - 1, T_beats)).astype(int)
     X_list = []
@@ -91,12 +91,7 @@ def main():
     model.load_state_dict(state_dict, strict=False)
     print(f"  Loaded (val F1 at save: {ckpt.get('val_f1', 'N/A')})")
 
-    # Process audio
-    print(f"Processing audio: {args.audio}")
-    X = audio_to_model_input(args.audio)
-    print(f"  Input shape: {X.shape}")
-
-    # Detect BPM if not provided
+    # Detect BPM before building model input so T_beats is exact
     if args.bpm is None:
         import librosa
         y, sr = load_audio(args.audio)
@@ -105,6 +100,12 @@ def main():
         print(f"  Auto-detected BPM: {bpm:.1f}")
     else:
         bpm = args.bpm
+        print(f"  Using BPM: {bpm:.1f}")
+
+    # Process audio
+    print(f"Processing audio: {args.audio}")
+    X = audio_to_model_input(args.audio, bpm=bpm)
+    print(f"  Input shape: {X.shape}")
 
     # Generate
     print(f"Generating chart (difficulty={args.difficulty}, threshold={args.threshold})...")
