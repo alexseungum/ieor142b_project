@@ -12,8 +12,13 @@ from typing import List, Optional, Tuple
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
-from config import SEQ_LEN as _SEQ_LEN
-from utils.data_utils import build_sample, difficulty_to_int
+from config import SEQ_LEN as _SEQ_LEN, CONTEXT_FRAMES, N_MELS, VALID_SUBDIV_POSITIONS, SUBDIVISION
+from utils.data_utils import build_sample, difficulty_to_int, get_subdiv_type
+
+# Repeating 24-position subdiv pattern for reconstructing old caches
+_SUBDIV_PATTERN = np.array(
+    [get_subdiv_type(p, SUBDIVISION) for p in VALID_SUBDIV_POSITIONS], dtype=np.int64
+)
 
 
 def _process_song(args):
@@ -94,18 +99,32 @@ class DDRDataset(Dataset):
         print(f"[{split}] {len(selected)} songs after difficulty filter (<={max_difficulty})")
 
         # Chunk into fixed-length windows
-        self.chunks = []  # list of (X_chunk, y_chunk, subdiv_types_chunk, difficulty)
+        # Each chunk stores (beat_frames_slice, y_slice, st_slice, mel, difficulty)
+        # mel is shared across all chunks of the same song — windows extracted in __getitem__
+        self.chunks = []
         for s in selected:
-            X, y, st, d = s['X'], s['y'], s['subdiv_types'], s['difficulty']
-            T = X.shape[0]
-            for start in range(0, T - self.seq_len + 1, self.seq_len // 2):  # 50% overlap
+            y, d = s['y'], s['difficulty']
+            T = y.shape[0]
+            if 'subdiv_types' in s:
+                st = s['subdiv_types']
+            else:
+                reps = (T + len(_SUBDIV_PATTERN) - 1) // len(_SUBDIV_PATTERN)
+                st = np.tile(_SUBDIV_PATTERN, reps)[:T]
+
+            if 'beat_frames' in s:
+                bf  = s['beat_frames']
+                mel = s['mel']          # (N_MELS, T_frames) float16
+            else:
+                # very old cache with pre-computed X — keep using it directly
+                X = s['X']
+                for start in range(0, T - self.seq_len + 1, self.seq_len // 2):
+                    end = start + self.seq_len
+                    self.chunks.append((X[start:end], None, y[start:end], st[start:end], d))
+                continue
+
+            for start in range(0, T - self.seq_len + 1, self.seq_len // 2):
                 end = start + self.seq_len
-                self.chunks.append((
-                    X[start:end],
-                    y[start:end],
-                    st[start:end],
-                    d,
-                ))
+                self.chunks.append((bf[start:end], mel, y[start:end], st[start:end], d))
         print(f"[{split}] {len(self.chunks)} chunks total")
 
     def _build_from_root(self, data_root: str) -> List[dict]:
@@ -151,7 +170,15 @@ class DDRDataset(Dataset):
         return len(self.chunks)
 
     def __getitem__(self, idx):
-        X, y, st, d = self.chunks[idx]
+        bf, mel, y, st, d = self.chunks[idx]
+        if mel is not None:
+            # vectorized window extraction: pad once, index all at once
+            ctx = CONTEXT_FRAMES
+            mel_f32 = np.pad(mel.astype(np.float32), ((0, 0), (ctx, ctx)))
+            col_idx = bf[:, None] + np.arange(-ctx, ctx + 1)[None, :]  # (T, 15)
+            X = mel_f32[:, col_idx].transpose(1, 2, 0)                  # (T, 15, N_MELS)
+        else:
+            X = bf  # old-cache path: bf holds pre-computed X
         return (
             torch.from_numpy(X),
             torch.from_numpy(y),

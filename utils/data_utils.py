@@ -416,26 +416,13 @@ def build_sample(
             frame_indices.append(fi)
     frame_indices = np.array(frame_indices)
 
-    X_list = []
-    for fi in frame_indices:
-        lo = max(0, fi - context)
-        hi = min(T_frames - 1, fi + context)
-        window = mel[:, lo:hi + 1]
-        pad_l = context - (fi - lo)
-        pad_r = context - (hi - fi)
-        if pad_l > 0:
-            window = np.concatenate([np.zeros((N_MELS, pad_l)), window], axis=1)
-        if pad_r > 0:
-            window = np.concatenate([window, np.zeros((N_MELS, pad_r))], axis=1)
-        X_list.append(window.T)
-
-    X = np.stack(X_list, axis=0)
     diff_int = difficulty_to_int(chart['difficulty'])
 
     return {
-        'X':           X.astype(np.float32),
-        'y':           labels.astype(np.float32),
+        'mel':          mel.astype(np.float16),         # (N_MELS, T_frames) — windowed on-the-fly
+        'beat_frames':  frame_indices.astype(np.int32), # (T,) frame index per timestep
+        'y':            labels.astype(np.float32),
         'subdiv_types': subdiv_types,
-        'difficulty':  diff_int,
-        'title':       sm_data['title'],
+        'difficulty':   diff_int,
+        'title':        sm_data['title'],
     }
