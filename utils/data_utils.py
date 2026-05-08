@@ -16,7 +16,7 @@ import librosa.display
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import SR, HOP_LENGTH, N_FFT, N_MELS, CONTEXT_FRAMES
+from config import SR, HOP_LENGTH, N_FFT, N_MELS, CONTEXT_FRAMES, SUBDIVISION
 
 # ─────────────────────────────────────────────
 # SM FILE PARSING
@@ -157,11 +157,11 @@ def difficulty_to_int(difficulty_str: str) -> int:
     return mapping.get(difficulty_str.lower(), 2)
 
 
-def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = 16) -> np.ndarray:
+def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = SUBDIVISION) -> np.ndarray:
     """
     Convert measure/row representation to a flat array of shape (T, 4).
     Each row is a binary vector indicating which arrows are active.
-    Resamples each measure to `subdivision` rows (standard: 16th notes = 16).
+    Resamples each measure to `subdivision` rows (default: from config).
     """
     rows = []
     for measure in measures:
@@ -203,7 +203,7 @@ def extract_mel_spectrogram(y: np.ndarray, sr: int = SR) -> np.ndarray:
 
 def frames_to_beats(bpms: List[Tuple[float, float]], offset: float,
                     n_frames: int, sr: int = SR, hop_length: int = HOP_LENGTH,
-                    subdivision: int = 16) -> np.ndarray:
+                    subdivision: int = SUBDIVISION) -> np.ndarray:
     """
     Map each audio frame index to the nearest beat-subdivision index.
     Returns array of shape (n_frames,) with beat-subdivision indices.
@@ -254,7 +254,7 @@ def build_sample(
     audio_path: str,
     sm_path: str,
     difficulty_filter: Optional[str] = None,
-    subdivision: int = 16,
+    subdivision: int = SUBDIVISION,
     context: int = CONTEXT_FRAMES,
 ) -> Optional[Dict]:
     """

@@ -11,7 +11,9 @@ CONTEXT_FRAMES = 7      # frames of audio context on each side of a timestep
 CONTEXT_LEN   = CONTEXT_FRAMES * 2 + 1   # total context window = 15 frames
 
 # ── Dataset ───────────────────────────────────────────────────
-SEQ_LEN       = 1024    # timesteps (16th notes) per training chunk (~64 measures)
+SUBDIVISION   = 48      # subdivisions per measure: LCM(4,8,12,16) covers 4th/8th/12th/16th notes
+SEQ_LEN       = 1536    # timesteps per training chunk (48 subdivisions × 32 measures)
+                        # stride = SEQ_LEN // 2 = 768 = 16 measures overlap
 N_DIFFICULTIES = 5      # difficulty levels: 0=beginner .. 4=challenge
 
 # ── Model architecture ────────────────────────────────────────
@@ -22,7 +24,7 @@ D_FF          = 1024
 DROPOUT       = 0.1
 
 # ── Training ──────────────────────────────────────────────────
-BATCH_SIZE         = 16     # reduced from 32 to handle longer SEQ_LEN
+BATCH_SIZE         = 8      # reduced to handle SEQ_LEN=1536 on L4 GPU
 LR                 = 3e-4
 WEIGHT_DECAY       = 1e-4
 EPOCHS_PER_STAGE   = 30
