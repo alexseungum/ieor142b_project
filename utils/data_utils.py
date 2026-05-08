@@ -274,22 +274,37 @@ def get_subdiv_type(pos: int, subdivision: int = SUBDIVISION) -> int:
 def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = SUBDIVISION):
     """
     Convert measure/row representation to arrays of shape (T, 4) and (T,).
-    Only emits the 24 valid positions per measure (divisible by 3 or 4 at subdivision=48),
-    skipping the always-empty slots to halve sequence length.
-    Returns: (labels array (T,4), subdiv_types array (T,))
+    Only emits the 24 valid positions per measure (divisible by 3 or 4 at subdivision=48).
+
+    Each SM row sits at exact position row_idx * subdivision / n within the measure.
+    For standard measure sizes (n = 4, 8, 12, 16, 48, 192, ...) this is always an
+    integer that falls exactly on one of the 24 valid positions — no rounding.
+    Notes that don't land on a valid position (non-standard subdivisions) are skipped.
     """
-    rows  = []
-    types = []
+    valid_pos_lookup  = {p: i for i, p in enumerate(VALID_SUBDIV_POSITIONS)}
+    N_VALID           = len(VALID_SUBDIV_POSITIONS)
+    subdiv_types_row  = [get_subdiv_type(p, subdivision) for p in VALID_SUBDIV_POSITIONS]
+
+    all_labels = []
     for measure in measures:
         n = len(measure)
-        for pos in VALID_SUBDIV_POSITIONS:
-            # Map pos (0..subdivision-1) to nearest row index in this measure
-            idx = min(int(round(pos * n / subdivision)), n - 1) if n > 0 else 0
-            row_str = measure[idx] if idx < len(measure) else '0000'
-            vec = np.array([0 if c == '0' else 1 for c in row_str[:4]], dtype=np.float32)
-            rows.append(vec)
-            types.append(get_subdiv_type(pos, subdivision))
-    return np.array(rows), np.array(types, dtype=np.int64)  # (T, 4), (T,)
+        measure_labels = np.zeros((N_VALID, 4), dtype=np.float32)
+        for row_idx, row_str in enumerate(measure):
+            pos_float = row_idx * subdivision / n
+            pos_int   = int(pos_float)
+            if pos_float != pos_int or pos_int not in valid_pos_lookup:
+                continue
+            vi = valid_pos_lookup[pos_int]
+            for col, c in enumerate(row_str[:4]):
+                if c != '0':
+                    measure_labels[vi, col] = 1.0
+        all_labels.append(measure_labels)
+
+    if not all_labels:
+        return np.zeros((0, 4), dtype=np.float32), np.array([], dtype=np.int64)
+    labels = np.vstack(all_labels)
+    types  = np.tile(subdiv_types_row, len(all_labels)).astype(np.int64)
+    return labels, types  # (T, 4), (T,)
 
 
 # ─────────────────────────────────────────────
