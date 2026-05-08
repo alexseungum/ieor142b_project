@@ -25,7 +25,7 @@ from models.model import DDRTransformer, DDRLoss
 from config import (
     D_MODEL, NHEAD, N_LAYERS, D_FF, DROPOUT,
     BATCH_SIZE, LR, WEIGHT_DECAY, EPOCHS_PER_STAGE,
-    PATIENCE, POS_WEIGHT, LABEL_SMOOTHING, NUM_WORKERS, CURRICULUM_START,
+    PATIENCE, POS_WEIGHT, LABEL_SMOOTHING, ARROW_WEIGHT, NUM_WORKERS, CURRICULUM_START,
 )
 
 
@@ -175,6 +175,7 @@ def train(args):
     criterion = DDRLoss(
         step_pos_weight=args.pos_weight,
         label_smoothing=args.label_smoothing,
+        arrow_weight=args.arrow_weight,
     )
 
     # ── Curriculum learning: stages 0 → 4 ──────────────────────────────────
@@ -209,26 +210,38 @@ def train(args):
         scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs_per_stage, eta_min=1e-6)
 
         patience_counter = 0
-        stage_best_f1 = 0.0
+        stage_best_score = 0.0
+        use_arrow_metric = False  # flips to True once step F1 crosses threshold
 
         for epoch in range(1, args.epochs_per_stage + 1):
             train_stats = train_epoch(model, train_loader, optimizer, criterion, device, scaler)
             val_stats   = eval_epoch(model, val_loader, criterion, device)
             scheduler.step()
 
+            # Switch model selection metric once step placement is good enough
+            if not use_arrow_metric and val_stats['f1'] >= args.arrow_metric_threshold:
+                use_arrow_metric = True
+                stage_best_score = 0.0  # reset so arrow_exact can start fresh
+                patience_counter = 0
+                print(f"  [metric switch] val F1 >= {args.arrow_metric_threshold} — now optimizing arrow_exact")
+
+            score        = val_stats['arrow_exact'] if use_arrow_metric else val_stats['f1']
+            metric_label = 'arr_exact' if use_arrow_metric else 'F1'
+
             print(
                 f"  Stage {stage} | Epoch {epoch:3d}/{args.epochs_per_stage} | "
                 f"Train loss {train_stats['loss']:.4f} (step {train_stats['step_loss']:.4f}, arrow {train_stats['arrow_loss']:.4f}) "
                 f"F1 {train_stats['f1']:.4f} arr_exact {train_stats['arrow_exact']:.4f} arr_per {train_stats['arrow_per']:.4f} | "
-                f"Val loss {val_stats['loss']:.4f} F1 {val_stats['f1']:.4f} arr_exact {val_stats['arrow_exact']:.4f}"
+                f"Val loss {val_stats['loss']:.4f} F1 {val_stats['f1']:.4f} arr_exact {val_stats['arrow_exact']:.4f} "
+                f"[{metric_label}={score:.4f}]"
             )
 
             all_train_history.append({'stage': stage, 'epoch': epoch, **train_stats})
             all_val_history.append({'stage': stage, 'epoch': epoch, **val_stats})
 
-            # Save best checkpoint
-            if val_stats['f1'] > best_val_f1:
-                best_val_f1 = val_stats['f1']
+            # Save best checkpoint based on active metric
+            if score > best_val_f1:
+                best_val_f1 = score
                 torch.save({
                     'stage': stage,
                     'epoch': epoch,
@@ -236,11 +249,11 @@ def train(args):
                     'val_f1': best_val_f1,
                     'args': vars(args),
                 }, os.path.join(args.checkpoint_dir, 'best_model.pt'))
-                print(f"    ✓ Saved best model (val F1={best_val_f1:.4f})")
+                print(f"    ✓ Saved best model ({metric_label}={best_val_f1:.4f})")
 
             # Early stopping within stage
-            if val_stats['f1'] > stage_best_f1:
-                stage_best_f1 = val_stats['f1']
+            if score > stage_best_score:
+                stage_best_score = score
                 patience_counter = 0
             else:
                 patience_counter += 1
@@ -279,7 +292,9 @@ def parse_args():
     p.add_argument('--n_layers',         type=int,   default=N_LAYERS)
     p.add_argument('--d_ff',             type=int,   default=D_FF)
     p.add_argument('--dropout',          type=float, default=DROPOUT)
-    p.add_argument('--pos_weight',       type=float, default=POS_WEIGHT,       help='Positive class weight for step BCE loss')
+    p.add_argument('--pos_weight',             type=float, default=POS_WEIGHT,       help='Positive class weight for step BCE loss')
+    p.add_argument('--arrow_weight',           type=float, default=ARROW_WEIGHT,     help='Scale arrow loss relative to step loss')
+    p.add_argument('--arrow_metric_threshold', type=float, default=0.85,             help='Val step F1 at which to switch early stopping to arrow_exact')
     p.add_argument('--label_smoothing',  type=float, default=LABEL_SMOOTHING)
     p.add_argument('--patience',         type=int,   default=PATIENCE,         help='Early stopping patience within each stage')
     p.add_argument('--num_workers',      type=int,   default=NUM_WORKERS)

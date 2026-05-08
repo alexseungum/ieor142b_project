@@ -40,5 +40,6 @@ EPOCHS_PER_STAGE   = 30
 PATIENCE           = 10
 POS_WEIGHT         = 5.0    # upweight positive steps (class imbalance)
 LABEL_SMOOTHING    = 0.1
+ARROW_WEIGHT       = 2.0    # scale arrow loss relative to step loss
 NUM_WORKERS        = 2
 CURRICULUM_START   = 0      # 0=start from beginner, 4=all difficulties from start
