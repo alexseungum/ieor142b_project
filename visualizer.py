@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.data_utils import parse_chart_file, measures_to_timestep_labels
+from config import SUBDIVISION
 
 
 def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
@@ -36,7 +37,7 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     if chart is None:
         raise ValueError("No dance-single chart found in .sm file")
 
-    labels = measures_to_timestep_labels(chart['measures'], subdivision=16)
+    labels = measures_to_timestep_labels(chart['measures'], subdivision=SUBDIVISION)
     T = len(labels)
 
     events = []
@@ -53,6 +54,7 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
         'offset': sm_data['offset'],
         'difficulty': chart['difficulty'],
         'meter': chart['meter'],
+        'subdivision': SUBDIVISION,
         'total_steps': int((labels.sum(-1) > 0).sum()),
         'total_timesteps': T,
         'events': events,
@@ -267,11 +269,22 @@ const W = 300, H = 520;
 const COL_XS = [14, 79, 144, 209];
 const ARROW_SIZE = 52;
 const HIT_Y = H - 72;
-const COL_COLORS = ['#ff3a3a','#00e676','#2979ff','#ffea00'];
 const COL_ARROWS = ['←','↓','↑','→'];
 const BPM = CHART.bpm;
-const SEC_PER_SUBDIV = (60 / BPM) / 4;
+const SUBDIVISION = CHART.subdivision || 48;
+const SEC_PER_SUBDIV = (60 / BPM) / (SUBDIVISION / 4);
 const TOTAL_DUR = CHART.total_timesteps * SEC_PER_SUBDIV;
+
+// Note colors by beat subdivision — matches ITG/StepMania standard
+function noteColor(t) {{
+  const pos = t % SUBDIVISION;
+  if (pos % (SUBDIVISION / 4)  === 0) return '#ff4040';  // 4th  — red
+  if (pos % (SUBDIVISION / 8)  === 0) return '#4080ff';  // 8th  — blue
+  if (pos % (SUBDIVISION / 12) === 0) return '#aa44ff';  // 12th — purple
+  if (pos % (SUBDIVISION / 16) === 0) return '#ffff00';  // 16th — yellow
+  if (pos % (SUBDIVISION / 24) === 0) return '#ff88ff';  // 24th — pink
+  return '#ff8800';                                        // 48th — orange
+}}
 
 const events = CHART.events.map(e => ({{...e, t_sec: e.t * SEC_PER_SUBDIV}}));
 
@@ -293,9 +306,9 @@ function drawRoundRect(x, y, w, h, r, fill, stroke, lw) {{
   if (stroke) {{ ctx.strokeStyle = stroke; ctx.lineWidth = lw || 2; ctx.stroke(); }}
 }}
 
-function drawArrow(col, y, alpha) {{
+function drawArrow(col, y, alpha, color) {{
   if (alpha <= 0) return;
-  const x = COL_XS[col], sz = ARROW_SIZE, color = COL_COLORS[col];
+  const x = COL_XS[col], sz = ARROW_SIZE;
   ctx.globalAlpha = Math.min(1, alpha);
   ctx.shadowColor = color; ctx.shadowBlur = 14;
   drawRoundRect(x, y - sz/2, sz, sz, 8, color + '28', color, 2);
@@ -307,12 +320,13 @@ function drawArrow(col, y, alpha) {{
   ctx.globalAlpha = 1;
 }}
 
+// Receptors are always white/dim — not subdivision-colored
 function drawReceptor(col) {{
-  const x = COL_XS[col], sz = ARROW_SIZE, color = COL_COLORS[col];
+  const x = COL_XS[col], sz = ARROW_SIZE, color = '#ffffff';
   const flash = recFlash[col] > 0;
-  ctx.globalAlpha = flash ? 1.0 : 0.18;
+  ctx.globalAlpha = flash ? 0.9 : 0.15;
   if (flash) {{ ctx.shadowColor = color; ctx.shadowBlur = 24; }}
-  drawRoundRect(x, HIT_Y - sz/2, sz, sz, 8, flash ? color + '55' : 'transparent', color, 2);
+  drawRoundRect(x, HIT_Y - sz/2, sz, sz, 8, flash ? color + '22' : 'transparent', color, 2);
   ctx.shadowBlur = 0;
   ctx.fillStyle = color;
   ctx.font = `bold ${{Math.round(sz * 0.62)}}px monospace`;
@@ -375,7 +389,8 @@ function draw() {{
       ? Math.max(0, 1 - (y - HIT_Y - 10) / 50)
       : 1.0;
 
-    for (let c = 0; c < 4; c++) if (ev.arrows[c]) drawArrow(c, y, alpha);
+    const color = noteColor(ev.t);
+    for (let c = 0; c < 4; c++) if (ev.arrows[c]) drawArrow(c, y, alpha, color);
   }}
 
   for (let c = 0; c < 4; c++) if (recFlash[c] > 0) recFlash[c]--;

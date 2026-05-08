@@ -160,6 +160,7 @@ def main():
             'offset': 0.0,
             'difficulty': DIFFICULTY_NAMES.get(args.difficulty, 'Medium'),
             'meter': args.difficulty * 3 + 3,
+            'subdivision': SUBDIVISION,
             'total_steps': int(step_mask.sum()),
             'total_timesteps': len(step_mask),
             'events': events,
