@@ -9,7 +9,7 @@ Architecture:
     3. Transformer encoder : attends over the full sequence
     4. Difficulty + subdivision embeddings
   Decoder:
-    5. Arrow embedding : project previous arrow combo into d_model (teacher-forced)
+    5. StepContextEmbedding : arrow combo + delta_subdiv (right-shifted) + beat_phase (current)
     6. Causal self-attention with 16-step lookback window
     7. Cross-attention over encoder audio features
     8. Step head + Arrow head : jointly predict step placement and directions
@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from typing import Tuple
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES, N_SUBDIV_TYPES
+from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES, N_SUBDIV_TYPES, N_VALID_PER_MEASURE
 
 
 # ─────────────────────────────────────────────
@@ -124,17 +124,53 @@ class SubdivisionEmbedding(nn.Module):
 # DECODER COMPONENTS
 # ─────────────────────────────────────────────
 
-class ArrowEmbedding(nn.Module):
-    def __init__(self, d_model: int = 256):
+def compute_delta_subdiv(arrows: torch.Tensor, max_delta: int = 48) -> torch.Tensor:
+    """For each timestep t, compute valid-position distance since the last step."""
+    B, T, _ = arrows.shape
+    has_step = (arrows.sum(-1) > 0)
+    t_idx = torch.arange(T, device=arrows.device)
+    step_idx = torch.where(
+        has_step,
+        t_idx.unsqueeze(0).expand(B, -1),
+        torch.full((B, T), -1, device=arrows.device, dtype=torch.long),
+    )
+    last_step_pos = torch.cummax(step_idx, dim=1).values       # (B, T)
+    delta = (t_idx.unsqueeze(0) - last_step_pos).clamp(0, max_delta)
+    return delta.long()
+
+
+class StepContextEmbedding(nn.Module):
+    """
+    Replaces ArrowEmbedding. Embeds three signals:
+      - arrow_proj : the arrow combination at t-1 (right-shifted)
+      - delta_emb  : valid-position distance since last step (right-shifted)
+      - phase_emb  : which of 24 valid positions within the measure (NOT shifted)
+    beat_phase gives each decoder position a unique cross-attention query even
+    when the entire arrow history is zeros, fixing the all-zeros collapse at inference.
+    """
+    def __init__(self, d_model: int = 256, max_delta: int = 48):
         super().__init__()
-        self.proj = nn.Linear(4, d_model)
+        self.arrow_proj  = nn.Linear(4, d_model)
+        self.delta_emb   = nn.Embedding(max_delta + 1, d_model)
+        self.phase_emb   = nn.Embedding(N_VALID_PER_MEASURE, d_model)
         self.start_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.max_delta   = max_delta
 
     def forward(self, arrows: torch.Tensor) -> torch.Tensor:
-        # arrows: (B, T, 4) — shift right by 1, prepend start token
-        embedded = self.proj(arrows)  # (B, T, d_model)
-        start = self.start_token.expand(arrows.size(0), -1, -1)
-        return torch.cat([start, embedded[:, :-1, :]], dim=1)  # (B, T, d_model)
+        # arrows: (B, T, 4) unshifted
+        B, T, _ = arrows.shape
+
+        # Arrow history + rhythmic spacing — right-shifted
+        delta        = compute_delta_subdiv(arrows, self.max_delta)       # (B, T)
+        hist         = self.arrow_proj(arrows) + self.delta_emb(delta)    # (B, T, d_model)
+        start        = self.start_token.expand(B, -1, -1)
+        hist_shifted = torch.cat([start, hist[:, :-1, :]], dim=1)         # (B, T, d_model)
+
+        # Beat phase at current position — NOT shifted
+        phase     = torch.arange(T, device=arrows.device) % N_VALID_PER_MEASURE
+        phase_emb = self.phase_emb(phase.unsqueeze(0).expand(B, -1))      # (B, T, d_model)
+
+        return hist_shifted + phase_emb
 
 
 def make_windowed_causal_mask(T: int, window: int = 16, device: str = 'cpu') -> torch.Tensor:
@@ -182,7 +218,7 @@ class ArrowDecoder(nn.Module):
         super().__init__()
         self.window = window
         self.token_dropout = token_dropout
-        self.arrow_embedding = ArrowEmbedding(d_model)
+        self.arrow_embedding = StepContextEmbedding(d_model)
         self.layers = nn.ModuleList([
             ArrowDecoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)
         ])

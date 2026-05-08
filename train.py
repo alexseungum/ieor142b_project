@@ -239,7 +239,7 @@ def train(args):
                 use_arrow_metric = True
                 stage_best_score = 0.0  # reset so arrow_exact can start fresh
                 patience_counter = 0
-                print(f"  [metric switch] val step_F1 >= {args.arrow_metric_threshold} — now optimizing arrow_exact")
+                print(f"  [metric switch] val step_F1 >= {args.arrow_metric_threshold} — best model selection and early stopping now track arrow_exact (loss/backprop unchanged)")
 
             score        = val_stats['arrow_exact'] if use_arrow_metric else val_stats['f1']
             metric_label = 'arr_exact' if use_arrow_metric else 'F1'
