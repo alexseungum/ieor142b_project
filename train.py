@@ -184,7 +184,6 @@ def train(args):
 
     all_train_history = []
     all_val_history   = []
-    best_val_f1 = 0.0
 
     for stage in range(args.curriculum_start, 5):
         print(f"\n{'='*60}")
@@ -239,31 +238,28 @@ def train(args):
             all_train_history.append({'stage': stage, 'epoch': epoch, **train_stats})
             all_val_history.append({'stage': stage, 'epoch': epoch, **val_stats})
 
-            # Save best checkpoint based on active metric
-            if score > best_val_f1:
-                best_val_f1 = score
-                torch.save({
-                    'stage': stage,
-                    'epoch': epoch,
-                    'model_state': model.state_dict(),
-                    'val_f1': best_val_f1,
-                    'args': vars(args),
-                }, os.path.join(args.checkpoint_dir, 'best_model.pt'))
-                print(f"    ✓ Saved best model ({metric_label}={best_val_f1:.4f})")
+            ckpt = {
+                'stage': stage,
+                'epoch': epoch,
+                'model_state': model.state_dict(),
+                'val_f1': val_stats['f1'],
+                'val_arrow_exact': val_stats['arrow_exact'],
+                'args': vars(args),
+            }
 
-            # Early stopping within stage
+            # Always save per-stage best (epoch 1 always saves since stage_best_score=0)
             if score > stage_best_score:
                 stage_best_score = score
                 patience_counter = 0
+                torch.save(ckpt, os.path.join(args.checkpoint_dir, f'stage{stage}_best.pt'))
+                # best_model.pt always reflects the latest stage's best
+                torch.save(ckpt, os.path.join(args.checkpoint_dir, 'best_model.pt'))
+                print(f"    ✓ Saved stage {stage} best ({metric_label}={score:.4f})")
             else:
                 patience_counter += 1
                 if patience_counter >= args.patience:
                     print(f"  Early stopping at epoch {epoch} (patience={args.patience})")
                     break
-
-        # Save per-stage checkpoint
-        torch.save(model.state_dict(),
-                   os.path.join(args.checkpoint_dir, f'stage{stage}_final.pt'))
 
     # Save training history
     import json
