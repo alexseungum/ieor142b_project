@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils.data_utils import (
     load_audio, extract_mel_spectrogram, N_MELS, CONTEXT_FRAMES
 )
+from config import HOP_LENGTH
 from config import SUBDIVISION, VALID_SUBDIV_POSITIONS
 from utils.data_utils import get_subdiv_type
 from utils.sm_writer import write_sm_file
