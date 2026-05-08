@@ -48,6 +48,22 @@ def compute_f1(step_logits, y, threshold=0.5):
     return f1, precision, recall
 
 
+def compute_arrow_acc(arrow_logits, y, threshold=0.5):
+    """
+    Arrow accuracy at timesteps where a step actually occurs (ground truth).
+    - exact_match: fraction of active timesteps where all 4 arrows are correct
+    - per_arrow:   average per-arrow accuracy across active timesteps
+    """
+    mask = (y.sum(-1) > 0)          # (B, T) — only score where steps exist
+    if not mask.any():
+        return 0.0, 0.0
+    preds   = (torch.sigmoid(arrow_logits[mask]) > threshold)  # (N, 4)
+    targets = y[mask].bool()                                    # (N, 4)
+    exact_match = (preds == targets).all(dim=-1).float().mean().item()
+    per_arrow   = (preds == targets).float().mean().item()
+    return exact_match, per_arrow
+
+
 # ─────────────────────────────────────────────
 # TRAIN / EVAL LOOPS
 # ─────────────────────────────────────────────
@@ -55,7 +71,7 @@ def compute_f1(step_logits, y, threshold=0.5):
 def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
     model.train()
     total_loss = step_loss_sum = arrow_loss_sum = 0.0
-    f1_sum = 0.0
+    f1_sum = arrow_exact_sum = arrow_per_sum = 0.0
     n = 0
 
     for X, y, subdiv_types, diff in loader:
@@ -79,17 +95,22 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
             optimizer.step()
 
         f1, _, _ = compute_f1(step_logits.detach(), y.detach())
-        total_loss     += loss.item()
-        step_loss_sum  += sl.item()
-        arrow_loss_sum += al.item()
-        f1_sum         += f1
+        exact, per = compute_arrow_acc(arrow_logits.detach(), y.detach())
+        total_loss      += loss.item()
+        step_loss_sum   += sl.item()
+        arrow_loss_sum  += al.item()
+        f1_sum          += f1
+        arrow_exact_sum += exact
+        arrow_per_sum   += per
         n += 1
 
     return {
-        'loss':       total_loss / n,
-        'step_loss':  step_loss_sum / n,
-        'arrow_loss': arrow_loss_sum / n,
-        'f1':         f1_sum / n,
+        'loss':        total_loss / n,
+        'step_loss':   step_loss_sum / n,
+        'arrow_loss':  arrow_loss_sum / n,
+        'f1':          f1_sum / n,
+        'arrow_exact': arrow_exact_sum / n,
+        'arrow_per':   arrow_per_sum / n,
     }
 
 
@@ -97,7 +118,7 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
 def eval_epoch(model, loader, criterion, device):
     model.eval()
     total_loss = step_loss_sum = arrow_loss_sum = 0.0
-    f1_sum = 0.0
+    f1_sum = arrow_exact_sum = arrow_per_sum = 0.0
     n = 0
 
     for X, y, subdiv_types, diff in loader:
@@ -106,17 +127,22 @@ def eval_epoch(model, loader, criterion, device):
         loss, sl, al = criterion(step_logits, arrow_logits, y)
 
         f1, _, _ = compute_f1(step_logits, y)
-        total_loss     += loss.item()
-        step_loss_sum  += sl.item()
-        arrow_loss_sum += al.item()
-        f1_sum         += f1
+        exact, per = compute_arrow_acc(arrow_logits, y)
+        total_loss      += loss.item()
+        step_loss_sum   += sl.item()
+        arrow_loss_sum  += al.item()
+        f1_sum          += f1
+        arrow_exact_sum += exact
+        arrow_per_sum   += per
         n += 1
 
     return {
-        'loss':       total_loss / n,
-        'step_loss':  step_loss_sum / n,
-        'arrow_loss': arrow_loss_sum / n,
-        'f1':         f1_sum / n,
+        'loss':        total_loss / n,
+        'step_loss':   step_loss_sum / n,
+        'arrow_loss':  arrow_loss_sum / n,
+        'f1':          f1_sum / n,
+        'arrow_exact': arrow_exact_sum / n,
+        'arrow_per':   arrow_per_sum / n,
     }
 
 
@@ -193,8 +219,8 @@ def train(args):
             print(
                 f"  Stage {stage} | Epoch {epoch:3d}/{args.epochs_per_stage} | "
                 f"Train loss {train_stats['loss']:.4f} (step {train_stats['step_loss']:.4f}, arrow {train_stats['arrow_loss']:.4f}) "
-                f"F1 {train_stats['f1']:.4f} | "
-                f"Val loss {val_stats['loss']:.4f} F1 {val_stats['f1']:.4f}"
+                f"F1 {train_stats['f1']:.4f} arr_exact {train_stats['arrow_exact']:.4f} arr_per {train_stats['arrow_per']:.4f} | "
+                f"Val loss {val_stats['loss']:.4f} F1 {val_stats['f1']:.4f} arr_exact {val_stats['arrow_exact']:.4f}"
             )
 
             all_train_history.append({'stage': stage, 'epoch': epoch, **train_stats})
