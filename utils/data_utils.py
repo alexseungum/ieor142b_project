@@ -16,7 +16,7 @@ import librosa.display
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import SR, HOP_LENGTH, N_FFT, N_MELS, CONTEXT_FRAMES, SUBDIVISION
+from config import SR, HOP_LENGTH, N_FFT, N_MELS, CONTEXT_FRAMES, SUBDIVISION, VALID_SUBDIV_POSITIONS
 
 # ─────────────────────────────────────────────
 # SM FILE PARSING
@@ -263,23 +263,33 @@ def difficulty_to_int(difficulty_str: str) -> int:
     return mapping.get(difficulty_str.lower(), 2)
 
 
-def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = SUBDIVISION) -> np.ndarray:
+def get_subdiv_type(pos: int, subdivision: int = SUBDIVISION) -> int:
+    """Return subdivision type: 0=4th, 1=8th, 2=12th(triplet), 3=16th."""
+    if pos % (subdivision // 4)  == 0: return 0
+    if pos % (subdivision // 8)  == 0: return 1
+    if pos % (subdivision // 12) == 0: return 2
+    return 3
+
+
+def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = SUBDIVISION):
     """
-    Convert measure/row representation to a flat array of shape (T, 4).
-    Each row is a binary vector indicating which arrows are active.
-    Resamples each measure to `subdivision` rows (default: from config).
+    Convert measure/row representation to arrays of shape (T, 4) and (T,).
+    Only emits the 24 valid positions per measure (divisible by 3 or 4 at subdivision=48),
+    skipping the always-empty slots to halve sequence length.
+    Returns: (labels array (T,4), subdiv_types array (T,))
     """
-    rows = []
+    rows  = []
+    types = []
     for measure in measures:
         n = len(measure)
-        # Resample to subdivision rows using nearest-neighbor
-        indices = np.round(np.linspace(0, n - 1, subdivision)).astype(int)
-        for idx in indices:
+        for pos in VALID_SUBDIV_POSITIONS:
+            # Map pos (0..subdivision-1) to nearest row index in this measure
+            idx = min(int(round(pos * n / subdivision)), n - 1) if n > 0 else 0
             row_str = measure[idx] if idx < len(measure) else '0000'
-            # Convert '1','2','4' -> active arrow; '0' -> inactive
             vec = np.array([0 if c == '0' else 1 for c in row_str[:4]], dtype=np.float32)
             rows.append(vec)
-    return np.array(rows)  # (T, 4)
+            types.append(get_subdiv_type(pos, subdivision))
+    return np.array(rows), np.array(types, dtype=np.int64)  # (T, 4), (T,)
 
 
 # ─────────────────────────────────────────────
@@ -388,34 +398,44 @@ def build_sample(
     if chart is None:
         return None
 
-    labels = measures_to_timestep_labels(chart['measures'], subdivision)  # (T_beats, 4)
-    T_beats = len(labels)
+    labels, subdiv_types = measures_to_timestep_labels(chart['measures'], subdivision)
     T_frames = mel.shape[1]
 
-    # Build context windows: for each beat-subdivision step, take ±context frames
-    # We first downsample mel to T_beats frames by uniform sampling
-    frame_indices = np.round(np.linspace(0, T_frames - 1, T_beats)).astype(int)
+    # Compute accurate frame index for each valid position in each measure.
+    # time = offset + (measure * subdivision + pos) * sec_per_one_subdivision_slot
+    bpm    = sm_data['bpms'][0][1] if sm_data['bpms'] else 120.0
+    offset = sm_data['offset']
+    sec_per_slot = (60.0 / bpm) / (subdivision / 4)  # duration of one subdivision slot
+
+    frame_indices = []
+    for m_idx in range(len(chart['measures'])):
+        for pos in VALID_SUBDIV_POSITIONS:
+            t  = offset + (m_idx * subdivision + pos) * sec_per_slot
+            fi = int(round(t * SR / HOP_LENGTH))
+            fi = max(0, min(T_frames - 1, fi))
+            frame_indices.append(fi)
+    frame_indices = np.array(frame_indices)
 
     X_list = []
     for fi in frame_indices:
         lo = max(0, fi - context)
         hi = min(T_frames - 1, fi + context)
-        window = mel[:, lo:hi + 1]  # (N_MELS, window_len)
-        # Pad if at edges
+        window = mel[:, lo:hi + 1]
         pad_l = context - (fi - lo)
         pad_r = context - (hi - fi)
         if pad_l > 0:
             window = np.concatenate([np.zeros((N_MELS, pad_l)), window], axis=1)
         if pad_r > 0:
             window = np.concatenate([window, np.zeros((N_MELS, pad_r))], axis=1)
-        X_list.append(window.T)  # (window_len, N_MELS)
+        X_list.append(window.T)
 
-    X = np.stack(X_list, axis=0)  # (T_beats, context*2+1, N_MELS)
+    X = np.stack(X_list, axis=0)
     diff_int = difficulty_to_int(chart['difficulty'])
 
     return {
-        'X': X.astype(np.float32),
-        'y': labels.astype(np.float32),
-        'difficulty': diff_int,
-        'title': sm_data['title'],
+        'X':           X.astype(np.float32),
+        'y':           labels.astype(np.float32),
+        'subdiv_types': subdiv_types,
+        'difficulty':  diff_int,
+        'title':       sm_data['title'],
     }

@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils.data_utils import (
     load_audio, extract_mel_spectrogram, N_MELS, CONTEXT_FRAMES
 )
-from config import SUBDIVISION
+from config import SUBDIVISION, VALID_SUBDIV_POSITIONS
+from utils.data_utils import get_subdiv_type
 from utils.sm_writer import write_sm_file
 from models.model import DDRTransformer, generate_chart
 from visualizer import build_chart_json, build_html
@@ -28,35 +29,45 @@ CONTEXT = CONTEXT_FRAMES
 
 
 def audio_to_model_input(audio_path: str, bpm: float, subdivision: int = SUBDIVISION,
-                          context: int = CONTEXT) -> torch.Tensor:
+                          context: int = CONTEXT):
     """
     Load audio and convert to model input tensor.
-    T_beats is derived from actual audio duration + BPM so generation stops at song end.
-    Returns: (1, T, context*2+1, N_MELS)
+    Only generates timesteps at valid subdivision positions (24 per measure).
+    Returns: X (1, T, context*2+1, N_MELS), subdiv_types (1, T)
     """
     y, sr = load_audio(audio_path)
     mel = extract_mel_spectrogram(y, sr)  # (N_MELS, T_frames)
 
     T_frames = mel.shape[1]
     duration_sec = len(y) / sr
-    T_beats = int(duration_sec * (bpm / 60) * subdivision)
+    n_measures = int(duration_sec * (bpm / 60) / 4)  # 4 beats per measure
+    sec_per_slot = (60.0 / bpm) / (subdivision / 4)
 
-    frame_indices = np.round(np.linspace(0, T_frames - 1, T_beats)).astype(int)
     X_list = []
-    for fi in frame_indices:
-        lo = max(0, fi - context)
-        hi = min(T_frames - 1, fi + context)
-        window = mel[:, lo:hi + 1]
-        pad_l = context - (fi - lo)
-        pad_r = context - (hi - fi)
-        if pad_l > 0:
-            window = np.concatenate([np.zeros((N_MELS, pad_l)), window], axis=1)
-        if pad_r > 0:
-            window = np.concatenate([window, np.zeros((N_MELS, pad_r))], axis=1)
-        X_list.append(window.T)  # (context*2+1, N_MELS)
+    subdiv_types_list = []
+    for m_idx in range(n_measures):
+        for pos in VALID_SUBDIV_POSITIONS:
+            t  = m_idx * subdivision * sec_per_slot + pos * sec_per_slot
+            fi = int(round(t * sr / HOP_LENGTH))
+            fi = max(0, min(T_frames - 1, fi))
+            lo = max(0, fi - context)
+            hi = min(T_frames - 1, fi + context)
+            window = mel[:, lo:hi + 1]
+            pad_l = context - (fi - lo)
+            pad_r = context - (hi - fi)
+            if pad_l > 0:
+                window = np.concatenate([np.zeros((N_MELS, pad_l)), window], axis=1)
+            if pad_r > 0:
+                window = np.concatenate([window, np.zeros((N_MELS, pad_r))], axis=1)
+            X_list.append(window.T)
+            subdiv_types_list.append(get_subdiv_type(pos, subdivision))
 
-    X = np.stack(X_list, axis=0).astype(np.float32)  # (T_beats, context*2+1, N_MELS)
-    return torch.from_numpy(X).unsqueeze(0)           # (1, T_beats, context*2+1, N_MELS)
+    X = np.stack(X_list, axis=0).astype(np.float32)
+    subdiv_types = np.array(subdiv_types_list, dtype=np.int64)
+    return (
+        torch.from_numpy(X).unsqueeze(0),           # (1, T, context*2+1, N_MELS)
+        torch.from_numpy(subdiv_types).unsqueeze(0) # (1, T)
+    )
 
 
 def main():
@@ -104,13 +115,13 @@ def main():
 
     # Process audio
     print(f"Processing audio: {args.audio}")
-    X = audio_to_model_input(args.audio, bpm=bpm)
+    X, subdiv_types = audio_to_model_input(args.audio, bpm=bpm)
     print(f"  Input shape: {X.shape}")
 
     # Generate
     print(f"Generating chart (difficulty={args.difficulty}, threshold={args.threshold})...")
     step_mask, arrow_preds = generate_chart(
-        model, X,
+        model, X, subdiv_types,
         difficulty=args.difficulty,
         step_threshold=args.threshold,
         device=device,

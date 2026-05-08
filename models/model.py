@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from typing import Tuple
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES
+from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES, N_SUBDIV_TYPES
 
 
 # ─────────────────────────────────────────────
@@ -102,6 +102,20 @@ class DifficultyEmbedding(nn.Module):
         return e.unsqueeze(1).expand(-1, T, -1)  # (B, T, d_model)
 
 
+class SubdivisionEmbedding(nn.Module):
+    """
+    Learned embedding for subdivision type (0=4th, 1=8th, 2=12th, 3=16th).
+    Added per-timestep so the model knows whether each slot is a triplet or not.
+    """
+    def __init__(self, n_types: int = N_SUBDIV_TYPES, d_model: int = 256):
+        super().__init__()
+        self.emb = nn.Embedding(n_types, d_model)
+
+    def forward(self, subdiv_types: torch.Tensor) -> torch.Tensor:
+        # subdiv_types: (B, T)
+        return self.emb(subdiv_types)  # (B, T, d_model)
+
+
 # ─────────────────────────────────────────────
 # MAIN MODEL
 # ─────────────────────────────────────────────
@@ -128,7 +142,8 @@ class DDRTransformer(nn.Module):
         self.pos_enc = SinusoidalPositionalEncoding(d_model, dropout=dropout)
 
         # 3. Difficulty conditioning
-        self.diff_emb = DifficultyEmbedding(N_DIFFICULTIES, d_model)
+        self.diff_emb   = DifficultyEmbedding(N_DIFFICULTIES, d_model)
+        self.subdiv_emb = SubdivisionEmbedding(N_SUBDIV_TYPES, d_model)
 
         # 4. Transformer encoder (BERT-style: full bidirectional attention)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -168,8 +183,9 @@ class DDRTransformer(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,       # (B, T, context_len, n_mels)
-        diff: torch.Tensor,    # (B,)  difficulty level
+        x: torch.Tensor,            # (B, T, context_len, n_mels)
+        diff: torch.Tensor,         # (B,)  difficulty level
+        subdiv_types: torch.Tensor, # (B, T) subdivision type per timestep
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
@@ -186,9 +202,13 @@ class DDRTransformer(nn.Module):
         # Add positional encoding
         feat = self.pos_enc(feat)            # (B, T, d_model)
 
-        # Add difficulty embedding
+        # Add difficulty embedding (global bias)
         diff_bias = self.diff_emb(diff, T)   # (B, T, d_model)
         feat = feat + diff_bias
+
+        # Add subdivision type embedding (per-timestep: tells model if slot is triplet etc.)
+        subdiv_bias = self.subdiv_emb(subdiv_types)  # (B, T, d_model)
+        feat = feat + subdiv_bias
 
         # Transformer encoder: full self-attention over sequence
         out = self.transformer(feat)         # (B, T, d_model)
@@ -265,9 +285,10 @@ class DDRLoss(nn.Module):
 @torch.no_grad()
 def generate_chart(
     model: DDRTransformer,
-    X: torch.Tensor,              # (1, T, context_len, n_mels)
+    X: torch.Tensor,                    # (1, T, context_len, n_mels)
+    subdiv_types: torch.Tensor,         # (1, T) subdivision types
     difficulty: int = 2,
-    step_threshold: float = 0.5,  # tuning knob: lower = more steps (easier feel)
+    step_threshold: float = 0.5,
     device: str = 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -279,9 +300,10 @@ def generate_chart(
     model.eval()
     model.to(device)
     X = X.to(device)
+    subdiv_types = subdiv_types.to(device)
     diff = torch.tensor([difficulty], dtype=torch.long, device=device)
 
-    step_logits, arrow_logits = model(X, diff)
+    step_logits, arrow_logits = model(X, diff, subdiv_types)
     step_probs  = torch.sigmoid(step_logits).squeeze(-1).squeeze(0).cpu().numpy()  # (T,)
     arrow_probs = torch.sigmoid(arrow_logits).squeeze(0).cpu().numpy()             # (T, 4)
 

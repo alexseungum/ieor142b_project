@@ -37,7 +37,7 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     if chart is None:
         raise ValueError("No dance-single chart found in .sm file")
 
-    labels = measures_to_timestep_labels(chart['measures'], subdivision=SUBDIVISION)
+    labels, _ = measures_to_timestep_labels(chart['measures'], subdivision=SUBDIVISION)
     T = len(labels)
 
     events = []

@@ -94,15 +94,16 @@ class DDRDataset(Dataset):
         print(f"[{split}] {len(selected)} songs after difficulty filter (<={max_difficulty})")
 
         # Chunk into fixed-length windows
-        self.chunks = []  # list of (X_chunk, y_chunk, difficulty)
+        self.chunks = []  # list of (X_chunk, y_chunk, subdiv_types_chunk, difficulty)
         for s in selected:
-            X, y, d = s['X'], s['y'], s['difficulty']
+            X, y, st, d = s['X'], s['y'], s['subdiv_types'], s['difficulty']
             T = X.shape[0]
             for start in range(0, T - self.seq_len + 1, self.seq_len // 2):  # 50% overlap
                 end = start + self.seq_len
                 self.chunks.append((
                     X[start:end],
                     y[start:end],
+                    st[start:end],
                     d,
                 ))
         print(f"[{split}] {len(self.chunks)} chunks total")
@@ -150,10 +151,11 @@ class DDRDataset(Dataset):
         return len(self.chunks)
 
     def __getitem__(self, idx):
-        X, y, d = self.chunks[idx]
+        X, y, st, d = self.chunks[idx]
         return (
             torch.from_numpy(X),
             torch.from_numpy(y),
+            torch.from_numpy(st),
             torch.tensor(d, dtype=torch.long),
         )
 
