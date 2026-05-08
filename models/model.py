@@ -356,7 +356,6 @@ class DDRLoss(nn.Module):
     """
     def __init__(
         self,
-        step_pos_weight: float = 5.0,  # upweight positive steps (class imbalance)
         label_smoothing: float = 0.1,
         arrow_weight: float = 1.0,
         step_weight: float = 1.0,
@@ -365,7 +364,6 @@ class DDRLoss(nn.Module):
         self.label_smoothing = label_smoothing
         self.arrow_weight = arrow_weight
         self.step_weight = step_weight
-        self.register_buffer('pos_weight', torch.tensor([step_pos_weight]))
 
     def smooth(self, target: torch.Tensor) -> torch.Tensor:
         """Apply label smoothing: shift labels away from 0/1."""
@@ -383,10 +381,15 @@ class DDRLoss(nn.Module):
         step_target = (y.sum(-1, keepdim=True) > 0).float()  # (B, T, 1)
         step_target_smooth = self.smooth(step_target)
 
+        # Dynamic pos_weight: balances step/no-step ratio per batch so dense
+        # hard charts don't get over-penalised relative to sparse easy charts
+        density    = step_target.mean().clamp(0.01, 0.99)
+        pos_weight = ((1 - density) / density).to(step_logits.device)
+
         step_loss = F.binary_cross_entropy_with_logits(
             step_logits,
             step_target_smooth,
-            pos_weight=self.pos_weight.to(step_logits.device),
+            pos_weight=pos_weight,
         )
 
         # Arrow loss (only on timesteps where a step occurs in ground truth)

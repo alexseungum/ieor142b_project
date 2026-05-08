@@ -25,7 +25,7 @@ from models.model import DDRTransformer, DDRLoss
 from config import (
     D_MODEL, NHEAD, N_LAYERS, D_FF, DROPOUT,
     BATCH_SIZE, LR, WEIGHT_DECAY, EPOCHS_PER_STAGE,
-    PATIENCE, POS_WEIGHT, LABEL_SMOOTHING, ARROW_WEIGHT, NUM_WORKERS, CURRICULUM_START,
+    PATIENCE, LABEL_SMOOTHING, ARROW_WEIGHT, NUM_WORKERS, CURRICULUM_START,
 )
 
 
@@ -72,7 +72,7 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None, epoch=
     n = 0
 
     # Scheduled sampling: linear ramp 0% → 50% over epochs_per_stage
-    ss_ratio = 0.5 * (epoch - 1) / max(epochs_per_stage - 1, 1)
+    ss_ratio = 0.25 * (epoch - 1) / max(epochs_per_stage - 1, 1)
 
     for X, y, subdiv_types, diff in loader:
         X, y, subdiv_types, diff = X.to(device), y.to(device), subdiv_types.to(device), diff.to(device)
@@ -189,7 +189,6 @@ def train(args):
     print(f"Model parameters: {n_params:,}")
 
     criterion = DDRLoss(
-        step_pos_weight=args.pos_weight,
         label_smoothing=args.label_smoothing,
         arrow_weight=args.arrow_weight,
     )
@@ -303,7 +302,6 @@ def parse_args():
     p.add_argument('--n_layers',         type=int,   default=N_LAYERS)
     p.add_argument('--d_ff',             type=int,   default=D_FF)
     p.add_argument('--dropout',          type=float, default=DROPOUT)
-    p.add_argument('--pos_weight',             type=float, default=POS_WEIGHT,       help='Positive class weight for step BCE loss')
     p.add_argument('--arrow_weight',           type=float, default=ARROW_WEIGHT,     help='Scale arrow loss relative to step loss')
     p.add_argument('--arrow_metric_threshold', type=float, default=0.85,             help='Val step F1 at which to switch early stopping to arrow_exact')
     p.add_argument('--label_smoothing',  type=float, default=LABEL_SMOOTHING)
