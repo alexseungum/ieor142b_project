@@ -384,16 +384,20 @@ def generate_chart(
 
     encoder_out = model.encode(X, diff, subdiv_types)  # (1, T, d_model)
     B, T, _ = encoder_out.shape
-    arrows = torch.zeros(B, T, 4, device=device)
+    arrows   = torch.zeros(B, T, 4, device=device)
+    step_mask = np.zeros(T, dtype=bool)
 
     for t in range(T):
         step_logits, arrow_logits = model.decoder(arrows, encoder_out)
-        step_prob = torch.sigmoid(step_logits[:, t, 0])   # (B,)
-        has_step  = step_prob > step_threshold
-        if has_step.any():
+        has_step = (torch.sigmoid(step_logits[:, t, 0]) > step_threshold).item()
+        step_mask[t] = has_step
+        if has_step:
             arrow_prob = torch.sigmoid(arrow_logits[:, t, :])  # (B, 4)
-            arrows[:, t, :] = (arrow_prob > 0.5).float() * has_step.unsqueeze(-1).float()
+            predicted = (arrow_prob > step_threshold).float()
+            if predicted.sum() == 0:
+                predicted[0, arrow_prob[0].argmax()] = 1.0
+            arrows[:, t, :] = predicted
 
-    step_mask   = arrows.squeeze(0).any(dim=-1).cpu().numpy()  # (T,) bool
-    arrow_preds = arrows.squeeze(0).long().cpu().numpy()       # (T, 4)
+    arrow_preds = arrows.squeeze(0).long().cpu().numpy()  # (T, 4)
+    arrow_preds[~step_mask] = 0
     return step_mask, arrow_preds
