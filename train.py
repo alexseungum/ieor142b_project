@@ -65,19 +65,14 @@ def compute_arrow_acc(arrow_logits, y, threshold=0.5):
 # TRAIN / EVAL LOOPS
 # ─────────────────────────────────────────────
 
-def train_epoch(model, loader, optimizer, criterion, device, scaler=None, epoch=1):
+def train_epoch(model, loader, optimizer, criterion, device, scaler=None, epoch=1, epochs_per_stage=30):
     model.train()
     total_loss = step_loss_sum = arrow_loss_sum = 0.0
     f1_sum = arrow_exact_sum = 0.0
     n = 0
 
-    # Scheduled sampling: gradually replace GT arrow history with model predictions
-    if epoch <= 10:
-        ss_ratio = 0.0
-    elif epoch <= 20:
-        ss_ratio = 0.25
-    else:
-        ss_ratio = 0.50
+    # Scheduled sampling: linear ramp 0% → 50% over epochs_per_stage
+    ss_ratio = 0.5 * (epoch - 1) / max(epochs_per_stage - 1, 1)
 
     for X, y, subdiv_types, diff in loader:
         X, y, subdiv_types, diff = X.to(device), y.to(device), subdiv_types.to(device), diff.to(device)
@@ -129,7 +124,7 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None, epoch=
 
 
 @torch.no_grad()
-def eval_epoch(model, loader, criterion, device):
+def eval_epoch(model, loader, criterion, device, ss_ratio=0.0):
     model.eval()
     total_loss = step_loss_sum = arrow_loss_sum = 0.0
     f1_sum = arrow_exact_sum = 0.0
@@ -137,7 +132,16 @@ def eval_epoch(model, loader, criterion, device):
 
     for X, y, subdiv_types, diff in loader:
         X, y, subdiv_types, diff = X.to(device), y.to(device), subdiv_types.to(device), diff.to(device)
-        step_logits, arrow_logits = model(X, diff, subdiv_types, y)
+
+        if ss_ratio > 0:
+            _, arrow_logits_gt = model(X, diff, subdiv_types, y)
+            arrow_preds = (torch.sigmoid(arrow_logits_gt) > 0.5).float()
+            use_pred = (torch.rand(y.shape[0], y.shape[1], 1, device=device) < ss_ratio)
+            arrows_in = torch.where(use_pred, arrow_preds, y)
+        else:
+            arrows_in = y
+
+        step_logits, arrow_logits = model(X, diff, subdiv_types, arrows_in)
         loss, sl, al = criterion(step_logits, arrow_logits, y)
 
         f1, _, _ = compute_f1(step_logits, y)
@@ -225,8 +229,9 @@ def train(args):
         use_arrow_metric = False  # flips to True once step F1 crosses threshold
 
         for epoch in range(1, args.epochs_per_stage + 1):
-            train_stats = train_epoch(model, train_loader, optimizer, criterion, device, scaler, epoch=epoch)
-            val_stats   = eval_epoch(model, val_loader, criterion, device)
+            ss_ratio    = 0.5 * (epoch - 1) / max(args.epochs_per_stage - 1, 1)
+            train_stats = train_epoch(model, train_loader, optimizer, criterion, device, scaler, epoch=epoch, epochs_per_stage=args.epochs_per_stage)
+            val_stats   = eval_epoch(model, val_loader, criterion, device, ss_ratio=ss_ratio)
             scheduler.step()
 
             # Switch model selection metric once step placement is good enough
