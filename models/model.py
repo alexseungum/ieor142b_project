@@ -177,9 +177,11 @@ class ArrowDecoderLayer(nn.Module):
 
 class ArrowDecoder(nn.Module):
     def __init__(self, d_model: int = 256, n_heads: int = 4, n_layers: int = 2,
-                 d_ff: int = 512, dropout: float = 0.1, window: int = 16):
+                 d_ff: int = 512, dropout: float = 0.1, window: int = 16,
+                 token_dropout: float = 0.3):
         super().__init__()
         self.window = window
+        self.token_dropout = token_dropout
         self.arrow_embedding = ArrowEmbedding(d_model)
         self.layers = nn.ModuleList([
             ArrowDecoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)
@@ -196,6 +198,11 @@ class ArrowDecoder(nn.Module):
                 encoder_out: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # arrows_gt: (B, T, 4)  encoder_out: (B, T, d_model)
         B, T, _ = encoder_out.shape
+        if self.training and self.token_dropout > 0:
+            # randomly zero out arrow history tokens so the model learns to
+            # handle missing/wrong history (fixes inference exposure bias)
+            keep = (torch.rand(B, T, 1, device=arrows_gt.device) > self.token_dropout).float()
+            arrows_gt = arrows_gt * keep
         x = self.arrow_embedding(arrows_gt)
         mask = make_windowed_causal_mask(T, self.window, encoder_out.device)
         for layer in self.layers:
@@ -221,6 +228,7 @@ class DDRTransformer(nn.Module):
         decoder_layers: int = 2,
         decoder_heads: int = 4,
         decoder_window: int = 16,
+        token_dropout: float = 0.3,
     ):
         super().__init__()
 
@@ -259,6 +267,7 @@ class DDRTransformer(nn.Module):
             d_ff=dim_feedforward,
             dropout=dropout,
             window=decoder_window,
+            token_dropout=token_dropout,
         )
 
         self._init_weights()
