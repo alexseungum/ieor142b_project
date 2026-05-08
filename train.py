@@ -64,7 +64,7 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
 
         if scaler is not None:
             with torch.amp.autocast('cuda'):
-                step_logits, arrow_logits = model(X, diff, subdiv_types)
+                step_logits, arrow_logits = model(X, diff, subdiv_types, y)
                 loss, sl, al = criterion(step_logits, arrow_logits, y)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -72,7 +72,7 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
             scaler.step(optimizer)
             scaler.update()
         else:
-            step_logits, arrow_logits = model(X, diff, subdiv_types)
+            step_logits, arrow_logits = model(X, diff, subdiv_types, y)
             loss, sl, al = criterion(step_logits, arrow_logits, y)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -102,7 +102,7 @@ def eval_epoch(model, loader, criterion, device):
 
     for X, y, subdiv_types, diff in loader:
         X, y, subdiv_types, diff = X.to(device), y.to(device), subdiv_types.to(device), diff.to(device)
-        step_logits, arrow_logits = model(X, diff, subdiv_types)
+        step_logits, arrow_logits = model(X, diff, subdiv_types, y)
         loss, sl, al = criterion(step_logits, arrow_logits, y)
 
         f1, _, _ = compute_f1(step_logits, y)

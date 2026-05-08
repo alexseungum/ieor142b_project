@@ -77,7 +77,7 @@ def main():
     p.add_argument('--difficulty', type=int, default=2,      help='Difficulty level 0-4')
     p.add_argument('--threshold',  type=float, default=0.5,  help='Step placement threshold (lower=more steps)')
     p.add_argument('--output',     type=str, default='output_chart', help='Output directory/prefix')
-    p.add_argument('--bpm',        type=float, default=None, help='Override BPM (auto-detected if not set)')
+    p.add_argument('--bpm',        type=float, required=True, help='Song BPM (check the .sm/.ssc file or a BPM detector)')
     args = p.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -96,22 +96,12 @@ def main():
         dropout=0.0,  # no dropout at inference
     )
     state_dict = ckpt['model_state']
-    # pos_enc.pe is a fixed sinusoidal buffer — remove it from the checkpoint
-    # so the model uses its own freshly computed version at the new max_len
     state_dict.pop('pos_enc.pe', None)
     model.load_state_dict(state_dict, strict=False)
     print(f"  Loaded (val F1 at save: {ckpt.get('val_f1', 'N/A')})")
 
-    # Detect BPM before building model input so T_beats is exact
-    if args.bpm is None:
-        import librosa
-        y, sr = load_audio(args.audio)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        bpm = float(tempo)
-        print(f"  Auto-detected BPM: {bpm:.1f}")
-    else:
-        bpm = args.bpm
-        print(f"  Using BPM: {bpm:.1f}")
+    bpm = args.bpm
+    print(f"  Using BPM: {bpm:.1f}")
 
     # Process audio
     print(f"Processing audio: {args.audio}")

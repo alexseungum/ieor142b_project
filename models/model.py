@@ -1,14 +1,18 @@
 """
 model.py
-CNN + Transformer encoder for DDR chart generation.
+CNN + Transformer encoder-decoder for DDR chart generation.
 
 Architecture:
-  1. Local CNN   : extracts rhythmic features from mel context windows
-  2. Positional encoding
-  3. Transformer encoder : attends over the full sequence
-  4. Difficulty embedding : injected as a learned offset (like a class token bias)
-  5. Step head   : binary logit — is there any arrow at this timestep?
-  6. Arrow head  : 4-way multi-label logits — which arrows are active?
+  Encoder:
+    1. Local CNN   : extracts rhythmic features from mel context windows
+    2. Positional encoding
+    3. Transformer encoder : attends over the full sequence
+    4. Difficulty + subdivision embeddings
+  Decoder:
+    5. Arrow embedding : project previous arrow combo into d_model (teacher-forced)
+    6. Causal self-attention with 16-step lookback window
+    7. Cross-attention over encoder audio features
+    8. Step head + Arrow head : jointly predict step placement and directions
 """
 
 import math
@@ -117,6 +121,90 @@ class SubdivisionEmbedding(nn.Module):
 
 
 # ─────────────────────────────────────────────
+# DECODER COMPONENTS
+# ─────────────────────────────────────────────
+
+class ArrowEmbedding(nn.Module):
+    def __init__(self, d_model: int = 256):
+        super().__init__()
+        self.proj = nn.Linear(4, d_model)
+        self.start_token = nn.Parameter(torch.zeros(1, 1, d_model))
+
+    def forward(self, arrows: torch.Tensor) -> torch.Tensor:
+        # arrows: (B, T, 4) — shift right by 1, prepend start token
+        embedded = self.proj(arrows)  # (B, T, d_model)
+        start = self.start_token.expand(arrows.size(0), -1, -1)
+        return torch.cat([start, embedded[:, :-1, :]], dim=1)  # (B, T, d_model)
+
+
+def make_windowed_causal_mask(T: int, window: int = 16, device: str = 'cpu') -> torch.Tensor:
+    causal  = torch.triu(torch.ones(T, T), diagonal=1).bool()
+    lookback = torch.tril(torch.ones(T, T), diagonal=-(window + 1)).bool()
+    return (causal | lookback).to(device)
+
+
+class ArrowDecoderLayer(nn.Module):
+    def __init__(self, d_model: int = 256, n_heads: int = 4, d_ff: int = 512, dropout: float = 0.1):
+        super().__init__()
+        self.self_attn  = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.ff = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.ReLU(), nn.Linear(d_ff, d_model)
+        )
+        self.norm1   = nn.LayerNorm(d_model)
+        self.norm2   = nn.LayerNorm(d_model)
+        self.norm3   = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor, encoder_out: torch.Tensor,
+                self_attn_mask: torch.Tensor) -> torch.Tensor:
+        residual = x
+        x = self.norm1(x)
+        x, _ = self.self_attn(x, x, x, attn_mask=self_attn_mask)
+        x = residual + self.dropout(x)
+
+        residual = x
+        x = self.norm2(x)
+        x, _ = self.cross_attn(x, encoder_out, encoder_out)
+        x = residual + self.dropout(x)
+
+        residual = x
+        x = self.norm3(x)
+        x = self.ff(x)
+        x = residual + self.dropout(x)
+        return x
+
+
+class ArrowDecoder(nn.Module):
+    def __init__(self, d_model: int = 256, n_heads: int = 4, n_layers: int = 2,
+                 d_ff: int = 512, dropout: float = 0.1, window: int = 16):
+        super().__init__()
+        self.window = window
+        self.arrow_embedding = ArrowEmbedding(d_model)
+        self.layers = nn.ModuleList([
+            ArrowDecoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)
+        ])
+        self.norm = nn.LayerNorm(d_model)
+        self.step_head = nn.Sequential(
+            nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 1)
+        )
+        self.arrow_head = nn.Sequential(
+            nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 4)
+        )
+
+    def forward(self, arrows_gt: torch.Tensor,
+                encoder_out: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # arrows_gt: (B, T, 4)  encoder_out: (B, T, d_model)
+        B, T, _ = encoder_out.shape
+        x = self.arrow_embedding(arrows_gt)
+        mask = make_windowed_causal_mask(T, self.window, encoder_out.device)
+        for layer in self.layers:
+            x = layer(x, encoder_out, mask)
+        x = self.norm(x)
+        return self.step_head(x), self.arrow_head(x)  # (B,T,1), (B,T,4)
+
+
+# ─────────────────────────────────────────────
 # MAIN MODEL
 # ─────────────────────────────────────────────
 
@@ -130,6 +218,9 @@ class DDRTransformer(nn.Module):
         dropout: float = 0.1,
         context_len: int = CONTEXT_LEN,
         n_mels: int = N_MELS,
+        decoder_layers: int = 2,
+        decoder_heads: int = 4,
+        decoder_window: int = 16,
     ):
         super().__init__()
 
@@ -151,8 +242,8 @@ class DDRTransformer(nn.Module):
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            batch_first=True,    # (B, T, d_model)
-            norm_first=True,     # Pre-LN: more stable training (improvement over original)
+            batch_first=True,
+            norm_first=True,
         )
         self.transformer = nn.TransformerEncoder(
             encoder_layer,
@@ -160,18 +251,14 @@ class DDRTransformer(nn.Module):
             norm=nn.LayerNorm(d_model),
         )
 
-        # 5. Output heads
-        self.step_head = nn.Sequential(
-            nn.Linear(d_model, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1),    # binary: step or no step
-        )
-        self.arrow_head = nn.Sequential(
-            nn.Linear(d_model, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 4),    # multi-label: which arrows
+        # 5. Autoregressive decoder — owns step and arrow prediction
+        self.decoder = ArrowDecoder(
+            d_model=d_model,
+            n_heads=decoder_heads,
+            n_layers=decoder_layers,
+            d_ff=dim_feedforward,
+            dropout=dropout,
+            window=decoder_window,
         )
 
         self._init_weights()
@@ -181,43 +268,35 @@ class DDRTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
+    def encode(
+        self,
+        x: torch.Tensor,            # (B, T, context_len, n_mels)
+        diff: torch.Tensor,         # (B,)
+        subdiv_types: torch.Tensor, # (B, T)
+    ) -> torch.Tensor:
+        """Run CNN + transformer encoder; return (B, T, d_model)."""
+        B, T, C, M = x.shape
+        feat = self.cnn(x.reshape(B * T, C, M)).reshape(B, T, self.d_model)
+        feat = self.pos_enc(feat)
+        feat = feat + self.diff_emb(diff, T)
+        feat = feat + self.subdiv_emb(subdiv_types)
+        return self.transformer(feat)
+
     def forward(
         self,
         x: torch.Tensor,            # (B, T, context_len, n_mels)
-        diff: torch.Tensor,         # (B,)  difficulty level
-        subdiv_types: torch.Tensor, # (B, T) subdivision type per timestep
+        diff: torch.Tensor,         # (B,)
+        subdiv_types: torch.Tensor, # (B, T)
+        arrows_gt: torch.Tensor,    # (B, T, 4) ground-truth arrows for teacher forcing
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
+        Teacher-forced forward pass.
         Returns:
-            step_logits  : (B, T, 1)  — logit for step placement
-            arrow_logits : (B, T, 4)  — logits for each arrow direction
+            step_logits  : (B, T, 1)
+            arrow_logits : (B, T, 4)
         """
-        B, T, C, M = x.shape
-
-        # CNN: process all (B*T) windows independently
-        x_flat = x.reshape(B * T, C, M)
-        feat = self.cnn(x_flat)              # (B*T, d_model)
-        feat = feat.reshape(B, T, self.d_model)  # (B, T, d_model)
-
-        # Add positional encoding
-        feat = self.pos_enc(feat)            # (B, T, d_model)
-
-        # Add difficulty embedding (global bias)
-        diff_bias = self.diff_emb(diff, T)   # (B, T, d_model)
-        feat = feat + diff_bias
-
-        # Add subdivision type embedding (per-timestep: tells model if slot is triplet etc.)
-        subdiv_bias = self.subdiv_emb(subdiv_types)  # (B, T, d_model)
-        feat = feat + subdiv_bias
-
-        # Transformer encoder: full self-attention over sequence
-        out = self.transformer(feat)         # (B, T, d_model)
-
-        # Heads
-        step_logits  = self.step_head(out)   # (B, T, 1)
-        arrow_logits = self.arrow_head(out)  # (B, T, 4)
-
-        return step_logits, arrow_logits
+        encoder_out = self.encode(x, diff, subdiv_types)
+        return self.decoder(arrows_gt, encoder_out)
 
 
 # ─────────────────────────────────────────────
@@ -292,7 +371,7 @@ def generate_chart(
     device: str = 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Generate a chart for a single song.
+    Autoregressively generate a chart for a single song.
     Returns:
         step_mask   : (T,) bool — where steps occur
         arrow_preds : (T, 4) int — arrow combination at each active step
@@ -303,12 +382,18 @@ def generate_chart(
     subdiv_types = subdiv_types.to(device)
     diff = torch.tensor([difficulty], dtype=torch.long, device=device)
 
-    step_logits, arrow_logits = model(X, diff, subdiv_types)
-    step_probs  = torch.sigmoid(step_logits).squeeze(-1).squeeze(0).cpu().numpy()  # (T,)
-    arrow_probs = torch.sigmoid(arrow_logits).squeeze(0).cpu().numpy()             # (T, 4)
+    encoder_out = model.encode(X, diff, subdiv_types)  # (1, T, d_model)
+    B, T, _ = encoder_out.shape
+    arrows = torch.zeros(B, T, 4, device=device)
 
-    step_mask   = step_probs > step_threshold
-    arrow_preds = (arrow_probs > 0.5).astype(int)
-    arrow_preds[~step_mask] = 0  # zero out arrows where no step predicted
+    for t in range(T):
+        step_logits, arrow_logits = model.decoder(arrows, encoder_out)
+        step_prob = torch.sigmoid(step_logits[:, t, 0])   # (B,)
+        has_step  = step_prob > step_threshold
+        if has_step.any():
+            arrow_prob = torch.sigmoid(arrow_logits[:, t, :])  # (B, 4)
+            arrows[:, t, :] = (arrow_prob > 0.5).float() * has_step.unsqueeze(-1).float()
 
+    step_mask   = arrows.squeeze(0).any(dim=-1).cpu().numpy()  # (T,) bool
+    arrow_preds = arrows.squeeze(0).long().cpu().numpy()       # (T, 4)
     return step_mask, arrow_preds
