@@ -178,7 +178,7 @@ class ArrowDecoderLayer(nn.Module):
 class ArrowDecoder(nn.Module):
     def __init__(self, d_model: int = 256, n_heads: int = 4, n_layers: int = 2,
                  d_ff: int = 512, dropout: float = 0.1, window: int = 16,
-                 token_dropout: float = 0.3):
+                 token_dropout: float = 0.1):
         super().__init__()
         self.window = window
         self.token_dropout = token_dropout
@@ -228,7 +228,7 @@ class DDRTransformer(nn.Module):
         decoder_layers: int = 2,
         decoder_heads: int = 4,
         decoder_window: int = 16,
-        token_dropout: float = 0.3,
+        token_dropout: float = 0.1,
     ):
         super().__init__()
 

@@ -65,19 +65,38 @@ def compute_arrow_acc(arrow_logits, y, threshold=0.5):
 # TRAIN / EVAL LOOPS
 # ─────────────────────────────────────────────
 
-def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
+def train_epoch(model, loader, optimizer, criterion, device, scaler=None, epoch=1):
     model.train()
     total_loss = step_loss_sum = arrow_loss_sum = 0.0
     f1_sum = arrow_exact_sum = 0.0
     n = 0
 
+    # Scheduled sampling: gradually replace GT arrow history with model predictions
+    if epoch <= 10:
+        ss_ratio = 0.0
+    elif epoch <= 20:
+        ss_ratio = 0.25
+    else:
+        ss_ratio = 0.50
+
     for X, y, subdiv_types, diff in loader:
         X, y, subdiv_types, diff = X.to(device), y.to(device), subdiv_types.to(device), diff.to(device)
         optimizer.zero_grad()
 
+        # Build mixed arrow input for scheduled sampling
+        if ss_ratio > 0:
+            with torch.no_grad():
+                _, arrow_logits_tf = model(X, diff, subdiv_types, y)
+            arrow_preds = (torch.sigmoid(arrow_logits_tf) > 0.5).float()
+            # Per-timestep coin flip: True = use model prediction, False = use GT
+            use_pred = (torch.rand(y.shape[0], y.shape[1], 1, device=device) < ss_ratio)
+            arrows_in = torch.where(use_pred, arrow_preds, y)
+        else:
+            arrows_in = y
+
         if scaler is not None:
             with torch.amp.autocast('cuda'):
-                step_logits, arrow_logits = model(X, diff, subdiv_types, y)
+                step_logits, arrow_logits = model(X, diff, subdiv_types, arrows_in)
                 loss, sl, al = criterion(step_logits, arrow_logits, y)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -85,7 +104,7 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None):
             scaler.step(optimizer)
             scaler.update()
         else:
-            step_logits, arrow_logits = model(X, diff, subdiv_types, y)
+            step_logits, arrow_logits = model(X, diff, subdiv_types, arrows_in)
             loss, sl, al = criterion(step_logits, arrow_logits, y)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -206,7 +225,7 @@ def train(args):
         use_arrow_metric = False  # flips to True once step F1 crosses threshold
 
         for epoch in range(1, args.epochs_per_stage + 1):
-            train_stats = train_epoch(model, train_loader, optimizer, criterion, device, scaler)
+            train_stats = train_epoch(model, train_loader, optimizer, criterion, device, scaler, epoch=epoch)
             val_stats   = eval_epoch(model, val_loader, criterion, device)
             scheduler.step()
 
