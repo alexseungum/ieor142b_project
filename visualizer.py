@@ -13,12 +13,12 @@ import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils.data_utils import parse_sm_file, measures_to_timestep_labels
+from utils.data_utils import parse_chart_file, measures_to_timestep_labels
 
 
 def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     """Parse a .sm file and return JSON-serializable chart data."""
-    sm_data = parse_sm_file(sm_path)
+    sm_data = parse_chart_file(sm_path)
 
     chart = None
     for c in sm_data['charts']:

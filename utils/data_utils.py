@@ -144,6 +144,112 @@ def parse_sm_file(sm_path: str) -> Dict:
     }
 
 
+def parse_ssc_file(ssc_path: str) -> Dict:
+    """
+    Parse a StepMania .ssc file.
+    Returns the same dict format as parse_sm_file so the rest of the pipeline is identical.
+    .ssc differs from .sm in that each chart is wrapped in a #NOTEDATA: block with
+    individual tags (#STEPSTYPE, #DIFFICULTY, #METER, #NOTES) instead of one combined block.
+    """
+    with open(ssc_path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    def get_tag(tag):
+        match = re.search(rf'#{tag}:([^;]*);', content, re.DOTALL | re.IGNORECASE)
+        return match.group(1).strip() if match else ''
+
+    title      = get_tag('TITLE')
+    bpm_str    = get_tag('BPMS')
+    offset_str = get_tag('OFFSET')
+
+    bpms = []
+    for part in bpm_str.split(','):
+        part = part.strip()
+        if '=' in part:
+            try:
+                beat, bpm = part.split('=', 1)
+                bpms.append((float(beat.strip()), float(bpm.strip())))
+            except ValueError:
+                continue
+
+    offset = 0.0
+    try:
+        offset = float(offset_str) if offset_str else 0.0
+    except ValueError:
+        pass
+
+    # Each chart lives in a #NOTEDATA: ... ; block
+    charts = []
+    for nd_match in re.finditer(r'#NOTEDATA\s*:', content, re.IGNORECASE):
+        # Find the extent of this NOTEDATA block (ends at the ; after the #NOTES: data)
+        block_start = nd_match.end()
+        # Find next #NOTEDATA or end of file
+        next_nd = re.search(r'#NOTEDATA\s*:', content[block_start:], re.IGNORECASE)
+        block_end = block_start + next_nd.start() if next_nd else len(content)
+        block = content[block_start:block_end]
+
+        def get_block_tag(tag):
+            m = re.search(rf'#{tag}\s*:([^;]*);', block, re.DOTALL | re.IGNORECASE)
+            return m.group(1).strip() if m else ''
+
+        chart_type = get_block_tag('STEPSTYPE')
+        difficulty = get_block_tag('DIFFICULTY')
+        meter_str  = get_block_tag('METER')
+        meter      = int(meter_str) if meter_str.lstrip('-').isdigit() else 0
+
+        if chart_type.lower() not in ('dance-single', 'dance single'):
+            continue
+
+        # Extract note rows from #NOTES: tag in this block
+        notes_match = re.search(r'#NOTES\s*:([^;]*);', block, re.DOTALL | re.IGNORECASE)
+        if not notes_match:
+            continue
+        note_content = notes_match.group(1)
+
+        measures = []
+        current_measure = []
+        for line in note_content.split('\n'):
+            stripped = line.strip()
+            if stripped.startswith('//'):
+                continue
+            if stripped == ',':
+                if current_measure:
+                    measures.append(current_measure)
+                current_measure = []
+                continue
+            if not stripped:
+                continue
+            if len(stripped) >= 4 and re.match(r'^[0-9MFKLmfkl]{4}', stripped):
+                row = stripped[:ARROW_COLS].ljust(ARROW_COLS, '0')
+                current_measure.append(row)
+
+        if current_measure:
+            measures.append(current_measure)
+        if not measures:
+            continue
+
+        charts.append({
+            'chart_type': chart_type,
+            'difficulty': difficulty,
+            'meter':      meter,
+            'measures':   measures,
+        })
+
+    return {
+        'title':  title,
+        'bpms':   bpms,
+        'offset': offset,
+        'charts': charts,
+    }
+
+
+def parse_chart_file(path: str) -> Dict:
+    """Parse either a .sm or .ssc file, dispatching based on extension."""
+    if path.lower().endswith('.ssc'):
+        return parse_ssc_file(path)
+    return parse_sm_file(path)
+
+
 def difficulty_to_int(difficulty_str: str) -> int:
     """Map difficulty string to integer 0-4."""
     mapping = {
@@ -262,9 +368,10 @@ def build_sample(
     X: (T, context*2+1, N_MELS) — mel context windows per timestep
     y: (T, 4) — binary arrow labels
     difficulty: int scalar
+    Accepts both .sm and .ssc chart files.
     """
     try:
-        sm_data = parse_sm_file(sm_path)
+        sm_data = parse_chart_file(sm_path)
         y_audio, sr = load_audio(audio_path)
         mel = extract_mel_spectrogram(y_audio, sr)  # (N_MELS, T_frames)
     except Exception as e:

@@ -116,18 +116,22 @@ class DDRDataset(Dataset):
         root = Path(data_root)
         audio_exts = {'.ogg', '.mp3', '.wav'}
 
-        # Find every folder that has at least one .sm file
-        all_sm = list(root.rglob('*.sm'))
-        song_dirs = sorted({sm.parent for sm in all_sm})
-        print(f"Found {len(song_dirs)} song directories")
+        # Find every folder that has at least one .sm or .ssc file
+        all_sm  = list(root.rglob('*.sm'))
+        all_ssc = list(root.rglob('*.ssc'))
+        song_dirs = sorted({f.parent for f in all_sm + all_ssc})
+        print(f"Found {len(song_dirs)} song directories ({len(all_sm)} .sm, {len(all_ssc)} .ssc)")
 
-        # Build list of (audio_path, sm_path) pairs
+        # Build list of (audio_path, chart_path) pairs
+        # Prefer .sm over .ssc if both exist in the same folder
         pairs = []
         for song_dir in song_dirs:
             sm_files    = list(song_dir.glob('*.sm'))
+            ssc_files   = list(song_dir.glob('*.ssc'))
             audio_files = [f for f in song_dir.iterdir() if f.suffix.lower() in audio_exts]
-            if sm_files and audio_files:
-                pairs.append((str(audio_files[0]), str(sm_files[0])))
+            chart_files = sm_files if sm_files else ssc_files
+            if chart_files and audio_files:
+                pairs.append((str(audio_files[0]), str(chart_files[0])))
 
         # Process in parallel — use min(8, cpu_count) workers
         n_workers = min(8, cpu_count())
