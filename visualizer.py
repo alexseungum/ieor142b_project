@@ -273,7 +273,7 @@ const COL_ARROWS = ['←','↓','↑','→'];
 const BPM = CHART.bpm;
 const SUBDIVISION = CHART.subdivision || 48;
 const SEC_PER_SUBDIV = (60 / BPM) / (SUBDIVISION / 4);
-const TOTAL_DUR = CHART.total_timesteps * SEC_PER_SUBDIV;
+const TOTAL_DUR = (CHART.offset || 0.0) + CHART.total_timesteps * SEC_PER_SUBDIV;
 
 // Note colors by beat subdivision — matches ITG/StepMania standard
 function noteColor(t) {{
@@ -286,7 +286,8 @@ function noteColor(t) {{
   return '#ff8800';                                        // 48th — orange
 }}
 
-const events = CHART.events.map(e => ({{...e, t_sec: e.t * SEC_PER_SUBDIV}}));
+const OFFSET = CHART.offset || 0.0;
+const events = CHART.events.map(e => ({{...e, t_sec: OFFSET + e.t * SEC_PER_SUBDIV}}));
 
 let playing = false, t = 0, lastTs = null, speed = 2.0;
 let combo = 0, hits = 0;
@@ -348,11 +349,12 @@ function draw() {{
 
   // beat grid
   const beatSec = 60 / BPM;
-  const startBeat = Math.floor((t - HIT_Y / pps()) / beatSec) * beatSec;
-  for (let b = startBeat; b < t + H / pps() + beatSec; b += beatSec) {{
+  const startBeatN = Math.floor(((t - OFFSET) - HIT_Y / pps()) / beatSec);
+  for (let n = startBeatN; OFFSET + n * beatSec < t + H / pps() + beatSec; n++) {{
+    const b = OFFSET + n * beatSec;
     const gy = eventY(b);
     if (gy < -2 || gy > H + 2) continue;
-    const isMeasure = Math.round(b / beatSec) % 4 === 0;
+    const isMeasure = n % 4 === 0;
     ctx.strokeStyle = isMeasure ? '#3a3a3a' : '#272727';
     ctx.lineWidth = isMeasure ? 1.5 : 0.5;
     ctx.beginPath(); ctx.moveTo(14, gy); ctx.lineTo(W - 14, gy); ctx.stroke();
@@ -404,7 +406,7 @@ function frame(ts) {{
   draw();
   document.getElementById('prog').style.width =
     (Math.min(1, t / TOTAL_DUR) * 100).toFixed(2) + '%';
-  const beat = Math.floor(t / (60 / BPM));
+  const beat = Math.max(0, Math.floor((t - OFFSET) / (60 / BPM)));
   document.getElementById('beat-lbl').textContent = 'BEAT ' + beat;
   const b4 = beat % 4;
   for (let i = 0; i < 4; i++)
