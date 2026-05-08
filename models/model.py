@@ -377,7 +377,7 @@ def generate_chart(
     subdiv_types: torch.Tensor,         # (1, T) subdivision types
     difficulty: int = 2,
     step_threshold: float = 0.5,
-    device: str = 'cpu',
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Autoregressively generate a chart for a single song.
