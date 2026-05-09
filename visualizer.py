@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.data_utils import parse_chart_file, measures_to_timestep_labels
-from config import SUBDIVISION
+from config import SUBDIVISION, VALID_SUBDIV_POSITIONS, N_VALID_PER_MEASURE
 
 
 def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
@@ -40,13 +40,19 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     labels, _ = measures_to_timestep_labels(chart['measures'], subdivision=SUBDIVISION)
     T = len(labels)
 
+    bpm = sm_data['bpms'][0][1] if sm_data['bpms'] else 120.0
+    offset = sm_data['offset']
+    sec_per_measure = 4 * (60.0 / bpm)
+
     events = []
     for t in range(T):
         if labels[t].sum() > 0:
             arrows = [int(labels[t, i]) for i in range(4)]
-            events.append({'t': t, 'arrows': arrows})
-
-    bpm = sm_data['bpms'][0][1] if sm_data['bpms'] else 120.0
+            measure_idx = t // N_VALID_PER_MEASURE
+            pos = VALID_SUBDIV_POSITIONS[t % N_VALID_PER_MEASURE]
+            beat_time = measure_idx * sec_per_measure + pos / SUBDIVISION * sec_per_measure
+            t_sec = offset + beat_time
+            events.append({'t': t, 'pos': pos, 't_sec': round(t_sec, 6), 'arrows': arrows})
 
     return {
         'title': sm_data['title'],
@@ -272,12 +278,14 @@ const HIT_Y = H - 72;
 const COL_ARROWS = ['←','↓','↑','→'];
 const BPM = CHART.bpm;
 const SUBDIVISION = CHART.subdivision || 48;
-const SEC_PER_SUBDIV = (60 / BPM) / (SUBDIVISION / 4);
-const TOTAL_DUR = (CHART.offset || 0.0) + CHART.total_timesteps * SEC_PER_SUBDIV;
+const OFFSET = CHART.offset || 0.0;
+const events = CHART.events;  // t_sec pre-computed in Python
+const TOTAL_DUR = events.length > 0
+  ? events[events.length - 1].t_sec + 4
+  : OFFSET + 30;
 
 // Note colors by beat subdivision — matches ITG/StepMania standard
-function noteColor(t) {{
-  const pos = t % SUBDIVISION;
+function noteColor(pos) {{
   if (pos % (SUBDIVISION / 4)  === 0) return '#ff4040';  // 4th  — red
   if (pos % (SUBDIVISION / 8)  === 0) return '#4080ff';  // 8th  — blue
   if (pos % (SUBDIVISION / 12) === 0) return '#aa44ff';  // 12th — purple
@@ -285,9 +293,6 @@ function noteColor(t) {{
   if (pos % (SUBDIVISION / 24) === 0) return '#ff88ff';  // 24th — pink
   return '#ff8800';                                        // 48th — orange
 }}
-
-const OFFSET = CHART.offset || 0.0;
-const events = CHART.events.map(e => ({{...e, t_sec: OFFSET + e.t * SEC_PER_SUBDIV}}));
 
 let playing = false, t = 0, lastTs = null, speed = 2.0;
 let combo = 0, hits = 0;
@@ -391,7 +396,7 @@ function draw() {{
       ? Math.max(0, 1 - (y - HIT_Y - 10) / 50)
       : 1.0;
 
-    const color = noteColor(ev.t);
+    const color = noteColor(ev.pos);
     for (let c = 0; c < 4; c++) if (ev.arrows[c]) drawArrow(c, y, alpha, color);
   }}
 
