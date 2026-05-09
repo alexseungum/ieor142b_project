@@ -173,8 +173,10 @@ class StepContextEmbedding(nn.Module):
         return hist_shifted + phase_emb
 
 
-def make_windowed_causal_mask(T: int, window: int = 16, device: str = 'cpu') -> torch.Tensor:
-    causal  = torch.triu(torch.ones(T, T), diagonal=1).bool()
+def make_windowed_causal_mask(T: int, window: int = None, device: str = 'cpu') -> torch.Tensor:
+    causal = torch.triu(torch.ones(T, T), diagonal=1).bool()
+    if window is None:
+        return causal.to(device)
     lookback = torch.tril(torch.ones(T, T), diagonal=-(window + 1)).bool()
     return (causal | lookback).to(device)
 
@@ -213,7 +215,7 @@ class ArrowDecoderLayer(nn.Module):
 
 class ArrowDecoder(nn.Module):
     def __init__(self, d_model: int = 256, n_heads: int = 4, n_layers: int = 2,
-                 d_ff: int = 512, dropout: float = 0.1, window: int = 16,
+                 d_ff: int = 512, dropout: float = 0.1, window: int = None,
                  token_dropout: float = 0.1):
         super().__init__()
         self.window = window
@@ -259,7 +261,7 @@ class DDRTransformer(nn.Module):
         n_mels: int = N_MELS,
         decoder_layers: int = 2,
         decoder_heads: int = 4,
-        decoder_window: int = 16,
+        decoder_window: int = None,
         token_dropout: float = 0.1,
     ):
         super().__init__()
