@@ -416,6 +416,7 @@ def generate_chart(
     subdiv_types: torch.Tensor,         # (1, T) subdivision types
     difficulty: int = 2,
     step_threshold: float = 0.5,
+    temperature: float = 1.0,           # >1 = more diverse arrows, <1 = sharper/greedier
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -440,11 +441,11 @@ def generate_chart(
         has_step = (torch.sigmoid(step_logits[:, t, 0]) > step_threshold).item()
         step_mask[t] = has_step
         if has_step:
-            arrow_prob = torch.sigmoid(arrow_logits[:, t, :])  # (B, 4)
-            predicted = (arrow_prob > step_threshold).float()
+            logits    = arrow_logits[0, t, :] / temperature       # (4,)
+            predicted = torch.bernoulli(torch.sigmoid(logits))     # (4,)
             if predicted.sum() == 0:
-                predicted[0, arrow_prob[0].argmax()] = 1.0
-            arrows[:, t, :] = predicted
+                predicted[torch.sigmoid(logits).argmax()] = 1.0
+            arrows[:, t, :] = predicted.unsqueeze(0)
 
     arrow_preds = arrows.squeeze(0).long().cpu().numpy()  # (T, 4)
     arrow_preds[~step_mask] = 0
