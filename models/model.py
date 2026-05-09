@@ -223,15 +223,12 @@ class ArrowDecoder(nn.Module):
             ArrowDecoderLayer(d_model, n_heads, d_ff, dropout) for _ in range(n_layers)
         ])
         self.norm = nn.LayerNorm(d_model)
-        self.step_head = nn.Sequential(
-            nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 1)
-        )
         self.arrow_head = nn.Sequential(
             nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 4)
         )
 
     def forward(self, arrows_gt: torch.Tensor,
-                encoder_out: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+                encoder_out: torch.Tensor) -> torch.Tensor:
         # arrows_gt: (B, T, 4)  encoder_out: (B, T, d_model)
         B, T, _ = encoder_out.shape
         if self.training and self.token_dropout > 0:
@@ -243,7 +240,7 @@ class ArrowDecoder(nn.Module):
         for layer in self.layers:
             x = layer(x, encoder_out, mask)
         x = self.norm(x)
-        return self.step_head(x), self.arrow_head(x)  # (B,T,1), (B,T,4)
+        return self.arrow_head(x)  # (B,T,4)
 
 
 # ─────────────────────────────────────────────
@@ -294,7 +291,12 @@ class DDRTransformer(nn.Module):
             norm=nn.LayerNorm(d_model),
         )
 
-        # 5. Autoregressive decoder — owns step and arrow prediction
+        # 5. Step prediction head — on encoder output (bidirectional audio context)
+        self.step_head = nn.Sequential(
+            nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 1)
+        )
+
+        # 6. Autoregressive decoder — arrow prediction only
         self.decoder = ArrowDecoder(
             d_model=d_model,
             n_heads=decoder_heads,
@@ -339,8 +341,10 @@ class DDRTransformer(nn.Module):
             step_logits  : (B, T, 1)
             arrow_logits : (B, T, 4)
         """
-        encoder_out = self.encode(x, diff, subdiv_types)
-        return self.decoder(arrows_gt, encoder_out)
+        encoder_out  = self.encode(x, diff, subdiv_types)
+        step_logits  = self.step_head(encoder_out)          # (B, T, 1)
+        arrow_logits = self.decoder(arrows_gt, encoder_out) # (B, T, 4)
+        return step_logits, arrow_logits
 
 
 # ─────────────────────────────────────────────
@@ -456,7 +460,8 @@ def generate_chart(
         X_c  = X[:, enc_start:enc_end, :, :]
         st_c = subdiv_types[:, enc_start:enc_end]
 
-        encoder_out = model.encode(X_c, diff, st_c)   # (1, SEQ_LEN, d_model)
+        encoder_out       = model.encode(X_c, diff, st_c)         # (1, SEQ_LEN, d_model)
+        step_logits_chunk = model.step_head(encoder_out)           # (1, SEQ_LEN, 1) — once per chunk
 
         arrows = torch.zeros(1, SEQ_LEN, 4, device=device)
 
@@ -471,8 +476,8 @@ def generate_chart(
             gen_end_pos   = SEQ_LEN
 
         for t in range(gen_start_pos, gen_end_pos):
-            sl, al = model.decoder(arrows, encoder_out)
-            prob     = torch.sigmoid(sl[:, t, 0]).item()
+            al       = model.decoder(arrows, encoder_out)
+            prob     = torch.sigmoid(step_logits_chunk[:, t, 0]).item()
             has_step = prob > step_threshold
             global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
             step_probs[global_t]  = prob
