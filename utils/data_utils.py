@@ -296,7 +296,7 @@ def measures_to_timestep_labels(measures: List[List[str]], subdivision: int = SU
                 continue
             vi = valid_pos_lookup[pos_int]
             for col, c in enumerate(row_str[:4]):
-                if c != '0':
+                if c in ('1', '2', '4'):  # tap, hold start, roll start — skip hold/roll end ('3')
                     measure_labels[vi, col] = 1.0
         all_labels.append(measure_labels)
 
