@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from typing import Tuple
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES, N_SUBDIV_TYPES, N_VALID_PER_MEASURE
+from config import N_MELS, CONTEXT_LEN, N_DIFFICULTIES, N_SUBDIV_TYPES, N_VALID_PER_MEASURE, SEQ_LEN
 
 
 # ─────────────────────────────────────────────
@@ -420,10 +420,12 @@ def generate_chart(
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Autoregressively generate a chart for a single song.
+    Autoregressively generate a chart using 50%-overlapping encoder chunks (STRIDE=SEQ_LEN//2).
+    Each chunk's encoder sees SEQ_LEN timesteps; only the first STRIDE positions are emitted
+    as output. Arrow history is carried across chunks to warm up the decoder.
     Returns:
-        step_mask   : (T,) bool — where steps occur
-        arrow_preds : (T, 4) int — arrow combination at each active step
+        step_mask   : (T_out,) bool — where steps occur
+        arrow_preds : (T_out, 4) int — arrow combination at each active step
     """
     model.eval()
     model.to(device)
@@ -431,22 +433,54 @@ def generate_chart(
     subdiv_types = subdiv_types.to(device)
     diff = torch.tensor([difficulty], dtype=torch.long, device=device)
 
-    encoder_out = model.encode(X, diff, subdiv_types)  # (1, T, d_model)
-    B, T, _ = encoder_out.shape
-    arrows   = torch.zeros(B, T, 4, device=device)
-    step_mask = np.zeros(T, dtype=bool)
+    T      = X.shape[1]
+    STRIDE = SEQ_LEN // 2    # 384
+    n_chunks = T // STRIDE
+    T_out    = n_chunks * STRIDE
 
-    for t in range(T):
-        step_logits, arrow_logits = model.decoder(arrows, encoder_out)
-        has_step = (torch.sigmoid(step_logits[:, t, 0]) > step_threshold).item()
-        step_mask[t] = has_step
-        if has_step:
-            logits    = arrow_logits[0, t, :] / temperature       # (4,)
-            predicted = torch.bernoulli(torch.sigmoid(logits))     # (4,)
-            if predicted.sum() == 0:
-                predicted[torch.sigmoid(logits).argmax()] = 1.0
-            arrows[:, t, :] = predicted.unsqueeze(0)
+    step_mask   = np.zeros(T_out, dtype=bool)
+    arrows_np   = np.zeros((T_out, 4), dtype=np.float32)
+    arrow_preds = np.zeros((T_out, 4), dtype=np.int64)
 
-    arrow_preds = arrows.squeeze(0).long().cpu().numpy()  # (T, 4)
-    arrow_preds[~step_mask] = 0
+    for chunk_idx in range(n_chunks):
+        if chunk_idx == 0:
+            enc_start, enc_end = 0, SEQ_LEN
+        else:
+            enc_start = (chunk_idx - 1) * STRIDE
+            enc_end   = enc_start + SEQ_LEN
+
+        if enc_end > T:
+            break
+
+        X_c  = X[:, enc_start:enc_end, :, :]
+        st_c = subdiv_types[:, enc_start:enc_end]
+
+        encoder_out = model.encode(X_c, diff, st_c)   # (1, SEQ_LEN, d_model)
+
+        arrows = torch.zeros(1, SEQ_LEN, 4, device=device)
+
+        if chunk_idx == 0:
+            gen_start_pos = 0
+            gen_end_pos   = STRIDE
+        else:
+            prev_s = (chunk_idx - 1) * STRIDE
+            prev_e = chunk_idx * STRIDE
+            arrows[0, :STRIDE, :] = torch.from_numpy(arrows_np[prev_s:prev_e]).to(device)
+            gen_start_pos = STRIDE
+            gen_end_pos   = SEQ_LEN
+
+        for t in range(gen_start_pos, gen_end_pos):
+            sl, al = model.decoder(arrows, encoder_out)
+            has_step = (torch.sigmoid(sl[:, t, 0]) > step_threshold).item()
+            global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
+            step_mask[global_t] = has_step
+            if has_step:
+                logits    = al[0, t, :] / temperature
+                predicted = torch.bernoulli(torch.sigmoid(logits))
+                if predicted.sum() == 0:
+                    predicted[torch.sigmoid(logits).argmax()] = 1.0
+                arrows[0, t, :] = predicted
+                arrows_np[global_t]   = predicted.cpu().numpy()
+                arrow_preds[global_t] = predicted.long().cpu().numpy()
+
     return step_mask, arrow_preds
