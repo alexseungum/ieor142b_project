@@ -33,7 +33,7 @@ D_FF          = 1024
 DROPOUT       = 0.1
 
 # ── Training ──────────────────────────────────────────────────
-BATCH_SIZE         = 32     # A100 40GB — bump to 64 if no OOM
+BATCH_SIZE         = 128     # A100 40GB — bump to 64 if no OOM
 LR                 = 3e-4
 WEIGHT_DECAY       = 1e-4
 EPOCHS_PER_STAGE   = 30
