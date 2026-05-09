@@ -152,26 +152,33 @@ def main():
     try:
         import json as _json
         import base64
+        from config import N_VALID_PER_MEASURE, VALID_SUBDIV_POSITIONS as _VSP
         DIFFICULTY_NAMES = {0: 'Beginner', 1: 'Easy', 2: 'Medium', 3: 'Hard', 4: 'Challenge'}
+        audio_t0 = 0.0  # no SM offset for user-provided audio
+        sec_per_meas = 4 * 60.0 / bpm
         events = []
         for t_idx in range(len(step_mask)):
             if step_mask[t_idx]:
                 arrows = [int(arrow_preds[t_idx, i]) for i in range(4)]
-                # If arrow head predicted nothing, default to the most common pattern
-                # (left+right alternating) so the chart is at least visible
                 if not any(arrows):
                     arrows[t_idx % 4] = 1
-                events.append({'t': t_idx, 'arrows': arrows})
+                measure_idx = t_idx // N_VALID_PER_MEASURE
+                pos = int(_VSP[t_idx % N_VALID_PER_MEASURE])
+                t_sec = audio_t0 + measure_idx * sec_per_meas + pos / SUBDIVISION * sec_per_meas
+                events.append({'t': t_idx, 'pos': pos, 't_sec': round(t_sec, 6), 'arrows': arrows})
 
+        total_measures = len(step_mask) // N_VALID_PER_MEASURE
+        total_duration = audio_t0 + total_measures * sec_per_meas
         chart_data = {
             'title': Path(args.audio).stem,
             'bpm': bpm,
-            'offset': 0.0,
+            'offset': audio_t0,
             'difficulty': DIFFICULTY_NAMES.get(args.difficulty, 'Medium'),
             'meter': args.difficulty * 3 + 3,
             'subdivision': SUBDIVISION,
             'total_steps': int(step_mask.sum()),
             'total_timesteps': len(step_mask),
+            'total_duration': round(total_duration, 3),
             'events': events,
         }
 
