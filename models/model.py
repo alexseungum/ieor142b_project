@@ -278,6 +278,8 @@ class DDRTransformer(nn.Module):
         self.diff_emb   = DifficultyEmbedding(N_DIFFICULTIES, d_model)
         self.subdiv_emb = SubdivisionEmbedding(N_SUBDIV_TYPES, d_model)
 
+        self.arrow_hist_emb = nn.Linear(4, d_model)
+
         # 4. Transformer encoder (BERT-style: full bidirectional attention)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -318,9 +320,10 @@ class DDRTransformer(nn.Module):
 
     def encode(
         self,
-        x: torch.Tensor,            # (B, T, context_len, n_mels)
-        diff: torch.Tensor,         # (B,)
-        subdiv_types: torch.Tensor, # (B, T)
+        x: torch.Tensor,                        # (B, T, context_len, n_mels)
+        diff: torch.Tensor,                     # (B,)
+        subdiv_types: torch.Tensor,             # (B, T)
+        arrows_shifted: torch.Tensor = None,    # (B, T, 4) right-shifted arrow history
     ) -> torch.Tensor:
         """Run CNN + transformer encoder; return (B, T, d_model)."""
         B, T, C, M = x.shape
@@ -328,6 +331,11 @@ class DDRTransformer(nn.Module):
         feat = self.pos_enc(feat)
         feat = feat + self.diff_emb(diff, T)
         feat = feat + self.subdiv_emb(subdiv_types)
+        if arrows_shifted is not None:
+            if self.training:
+                drop = (torch.rand(arrows_shifted.shape[0], 1, 1, device=arrows_shifted.device) < 0.1).float()
+                arrows_shifted = arrows_shifted * (1.0 - drop)
+            feat = feat + self.arrow_hist_emb(arrows_shifted)
         return self.transformer(feat)
 
     def forward(
@@ -343,7 +351,12 @@ class DDRTransformer(nn.Module):
             step_logits  : (B, T, 1)
             arrow_logits : (B, T, 4)
         """
-        encoder_out  = self.encode(x, diff, subdiv_types)
+        # Right-shift arrows so encoder at position t sees arrow from t-1
+        B, T, _ = arrows_gt.shape
+        start = torch.zeros(B, 1, 4, device=arrows_gt.device)
+        arrows_shifted = torch.cat([start, arrows_gt[:, :-1, :]], dim=1)
+
+        encoder_out  = self.encode(x, diff, subdiv_types, arrows_shifted)
         step_logits  = self.step_head(encoder_out)          # (B, T, 1)
         arrow_logits = self.decoder(arrows_gt, encoder_out) # (B, T, 4)
         return step_logits, arrow_logits
@@ -469,9 +482,6 @@ def generate_chart(
         X_c  = X[:, enc_start:enc_end, :, :]
         st_c = subdiv_types[:, enc_start:enc_end]
 
-        encoder_out       = model.encode(X_c, diff, st_c)         # (1, SEQ_LEN, d_model)
-        step_logits_chunk = model.step_head(encoder_out)           # (1, SEQ_LEN, 1) — once per chunk
-
         arrows = torch.zeros(1, SEQ_LEN, 4, device=device)
 
         if chunk_idx == 0:
@@ -483,6 +493,12 @@ def generate_chart(
             arrows[0, :STRIDE, :] = torch.from_numpy(arrows_np[prev_s:prev_e]).to(device)
             gen_start_pos = STRIDE
             gen_end_pos   = SEQ_LEN
+
+        # Re-encode with arrow history so encoder matches training conditioning
+        start_tok = torch.zeros(1, 1, 4, device=device)
+        arrows_shifted = torch.cat([start_tok, arrows[:, :-1, :]], dim=1)
+        encoder_out = model.encode(X_c, diff, st_c, arrows_shifted)
+        step_logits_chunk = model.step_head(encoder_out)
 
         for t in range(gen_start_pos, gen_end_pos):
             al       = model.decoder(arrows, encoder_out)
