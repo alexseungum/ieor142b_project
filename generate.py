@@ -138,6 +138,10 @@ def main():
         difficulty=args.difficulty,
     )
 
+    # Save predictions for notebook plotting
+    np.savez(f"{args.output}/predictions.npz",
+             step_mask=step_mask, arrow_preds=arrow_preds, bpm=np.array(bpm))
+
     # Copy audio to output dir
     import shutil
     shutil.copy(args.audio, f"{args.output}/{audio_name}")
