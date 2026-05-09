@@ -41,8 +41,8 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     T = len(labels)
 
     bpm = sm_data['bpms'][0][1] if sm_data['bpms'] else 120.0
-    # SM #OFFSET convention: positive = audio plays for `offset` seconds before beat 0
-    audio_t0 = sm_data['offset']
+    # SM #OFFSET convention: audio_t0 = -offset (same as frames_to_beats: current_time = -offset)
+    audio_t0 = -sm_data['offset']
     sec_per_measure = 4 * (60.0 / bpm)
 
     events = []
