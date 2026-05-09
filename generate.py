@@ -112,7 +112,7 @@ def main():
 
     # Generate
     print(f"Generating chart (difficulty={args.difficulty}, threshold={args.threshold})...")
-    step_mask, arrow_preds = generate_chart(
+    step_mask, arrow_preds, step_probs = generate_chart(
         model, X, subdiv_types,
         difficulty=args.difficulty,
         step_threshold=args.threshold,
@@ -140,7 +140,8 @@ def main():
 
     # Save predictions for notebook plotting
     np.savez(f"{args.output}/predictions.npz",
-             step_mask=step_mask, arrow_preds=arrow_preds, bpm=np.array(bpm))
+             step_mask=step_mask, arrow_preds=arrow_preds,
+             step_probs=step_probs, bpm=np.array(bpm))
 
     # Copy audio to output dir
     import shutil

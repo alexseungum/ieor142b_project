@@ -418,14 +418,15 @@ def generate_chart(
     step_threshold: float = 0.5,
     temperature: float = 1.0,           # >1 = more diverse arrows, <1 = sharper/greedier
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Autoregressively generate a chart using 50%-overlapping encoder chunks (STRIDE=SEQ_LEN//2).
     Each chunk's encoder sees SEQ_LEN timesteps; only the first STRIDE positions are emitted
     as output. Arrow history is carried across chunks to warm up the decoder.
     Returns:
-        step_mask   : (T_out,) bool — where steps occur
+        step_mask   : (T_out,) bool  — where steps occur
         arrow_preds : (T_out, 4) int — arrow combination at each active step
+        step_probs  : (T_out,) float — raw step probability at every timestep
     """
     model.eval()
     model.to(device)
@@ -439,6 +440,7 @@ def generate_chart(
     T_out    = n_chunks * STRIDE
 
     step_mask   = np.zeros(T_out, dtype=bool)
+    step_probs  = np.zeros(T_out, dtype=np.float32)
     arrows_np   = np.zeros((T_out, 4), dtype=np.float32)
     arrow_preds = np.zeros((T_out, 4), dtype=np.int64)
 
@@ -471,9 +473,11 @@ def generate_chart(
 
         for t in range(gen_start_pos, gen_end_pos):
             sl, al = model.decoder(arrows, encoder_out)
-            has_step = (torch.sigmoid(sl[:, t, 0]) > step_threshold).item()
+            prob     = torch.sigmoid(sl[:, t, 0]).item()
+            has_step = prob > step_threshold
             global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
-            step_mask[global_t] = has_step
+            step_probs[global_t]  = prob
+            step_mask[global_t]   = has_step
             if has_step:
                 logits    = al[0, t, :] / temperature
                 predicted = torch.bernoulli(torch.sigmoid(logits))
@@ -483,4 +487,4 @@ def generate_chart(
                 arrows_np[global_t]   = predicted.cpu().numpy()
                 arrow_preds[global_t] = predicted.long().cpu().numpy()
 
-    return step_mask, arrow_preds
+    return step_mask, arrow_preds, step_probs

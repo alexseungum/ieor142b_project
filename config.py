@@ -26,7 +26,7 @@ N_DIFFICULTIES = 5      # difficulty levels: 0=beginner .. 4=challenge
 N_SUBDIV_TYPES = 4      # 0=4th, 1=8th, 2=12th(triplet), 3=16th
 
 # ── Model architecture ────────────────────────────────────────
-D_MODEL       = 256
+D_MODEL       = 512
 NHEAD         = 8
 N_LAYERS      = 4
 D_FF          = 1024
