@@ -185,6 +185,13 @@ def train(args):
         dropout=args.dropout,
     ).to(device)
 
+    if args.resume:
+        ckpt_r = torch.load(args.resume, map_location=device)
+        sd = ckpt_r['model_state']
+        sd.pop('pos_enc.pe', None)
+        model.load_state_dict(sd, strict=False)
+        print(f"Resumed from {args.resume}  (stage {ckpt_r.get('stage','?')}, epoch {ckpt_r.get('epoch','?')}, val_f1 {ckpt_r.get('val_f1',0):.4f})")
+
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
@@ -308,6 +315,7 @@ def parse_args():
     p.add_argument('--patience',         type=int,   default=PATIENCE,         help='Early stopping patience within each stage')
     p.add_argument('--num_workers',      type=int,   default=NUM_WORKERS)
     p.add_argument('--curriculum_start', type=int,   default=CURRICULUM_START, help='Start at this difficulty stage (0=beginner)')
+    p.add_argument('--resume',           type=str,   default=None,             help='Path to checkpoint to resume weights from')
     return p.parse_args()
 
 
