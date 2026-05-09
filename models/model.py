@@ -235,10 +235,9 @@ class ArrowDecoder(nn.Module):
         # arrows_gt: (B, T, 4)  encoder_out: (B, T, d_model)
         B, T, _ = encoder_out.shape
         if self.training and self.token_dropout > 0:
-            # randomly zero out arrow history tokens so the model learns to
-            # handle missing/wrong history (fixes inference exposure bias)
-            keep = (torch.rand(B, T, 1, device=arrows_gt.device) > self.token_dropout).float()
-            arrows_gt = arrows_gt * keep
+            # with prob token_dropout, wipe the entire arrow history for the sequence
+            drop = (torch.rand(B, 1, 1, device=arrows_gt.device) < self.token_dropout).float()
+            arrows_gt = arrows_gt * (1.0 - drop)
         x = self.arrow_embedding(arrows_gt)
         mask = make_windowed_causal_mask(T, self.window, encoder_out.device)
         for layer in self.layers:
