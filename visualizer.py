@@ -41,7 +41,8 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
     T = len(labels)
 
     bpm = sm_data['bpms'][0][1] if sm_data['bpms'] else 120.0
-    offset = sm_data['offset']
+    # SM #OFFSET convention: positive = audio plays for `offset` seconds before beat 0
+    audio_t0 = sm_data['offset']
     sec_per_measure = 4 * (60.0 / bpm)
 
     events = []
@@ -51,18 +52,22 @@ def build_chart_json(sm_path: str, difficulty_filter: str = None) -> dict:
             measure_idx = t // N_VALID_PER_MEASURE
             pos = VALID_SUBDIV_POSITIONS[t % N_VALID_PER_MEASURE]
             beat_time = measure_idx * sec_per_measure + pos / SUBDIVISION * sec_per_measure
-            t_sec = offset + beat_time
+            t_sec = audio_t0 + beat_time
             events.append({'t': t, 'pos': pos, 't_sec': round(t_sec, 6), 'arrows': arrows})
+
+    num_measures = T // N_VALID_PER_MEASURE
+    total_duration = audio_t0 + num_measures * sec_per_measure
 
     return {
         'title': sm_data['title'],
         'bpm': bpm,
-        'offset': sm_data['offset'],
+        'offset': audio_t0,   # audio time of beat 0, for JS beat grid
         'difficulty': chart['difficulty'],
         'meter': chart['meter'],
         'subdivision': SUBDIVISION,
         'total_steps': int((labels.sum(-1) > 0).sum()),
         'total_timesteps': T,
+        'total_duration': round(total_duration, 3),
         'events': events,
     }
 
@@ -280,16 +285,14 @@ const BPM = CHART.bpm;
 const SUBDIVISION = CHART.subdivision || 48;
 const OFFSET = CHART.offset || 0.0;
 const events = CHART.events;  // t_sec pre-computed in Python
-const TOTAL_DUR = events.length > 0
-  ? events[events.length - 1].t_sec + 4
-  : OFFSET + 30;
+const TOTAL_DUR = (CHART.total_duration || (OFFSET + 30)) + 10;
 
 // Note colors by beat subdivision — matches ITG/StepMania standard
 function noteColor(pos) {{
   if (pos % (SUBDIVISION / 4)  === 0) return '#ff4040';  // 4th  — red
   if (pos % (SUBDIVISION / 8)  === 0) return '#4080ff';  // 8th  — blue
   if (pos % (SUBDIVISION / 12) === 0) return '#aa44ff';  // 12th — purple
-  if (pos % (SUBDIVISION / 16) === 0) return '#ffff00';  // 16th — yellow
+  if (pos % (SUBDIVISION / 16) === 0) return '#44dd88';  // 16th — green
   if (pos % (SUBDIVISION / 24) === 0) return '#ff88ff';  // 24th — pink
   return '#ff8800';                                        // 48th — orange
 }}
