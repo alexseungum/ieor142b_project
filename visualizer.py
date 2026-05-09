@@ -265,6 +265,8 @@ canvas {{ border:1px solid var(--border); border-radius:4px; display:block; }}
     <div class="stat-label">COMBO</div>
     <div style="margin-top:10px" class="stat-big" id="stat-hits">0</div>
     <div class="stat-label">STEPS HIT</div>
+    <div style="margin-top:10px" class="stat-big" id="stat-misses">0</div>
+    <div class="stat-label">MISSES</div>
     <div class="beat-dots">
       <div class="dot" id="d0"></div><div class="dot" id="d1"></div>
       <div class="dot" id="d2"></div><div class="dot" id="d3"></div>
@@ -297,10 +299,17 @@ function noteColor(pos) {{
   return '#ff8800';                                        // 48th — orange
 }}
 
+const KEY_TO_COL = {{ ArrowLeft: 0, ArrowDown: 1, ArrowUp: 2, ArrowRight: 3 }};
+const PERFECT_WIN = 0.075;  // ±75ms
+const GOOD_WIN    = 0.140;  // ±140ms
+const MISS_PASS   = 0.200;  // auto-miss if note passes hit line by 200ms
+
 let playing = false, t = 0, lastTs = null, speed = 2.0;
-let combo = 0, hits = 0;
-let firedSet = new Set();
+let combo = 0, hits = 0, misses = 0;
+let hitSet  = new Set();
+let missSet = new Set();
 let recFlash = [0,0,0,0];
+let judgment = {{ text: '', color: '#ffffff', alpha: 0 }};
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
@@ -344,6 +353,48 @@ function drawReceptor(col) {{
   ctx.globalAlpha = 1;
 }}
 
+function updateStats() {{
+  document.getElementById('stat-combo').textContent  = combo;
+  document.getElementById('stat-hits').textContent   = hits;
+  document.getElementById('stat-misses').textContent = misses;
+}}
+
+function showJudgment(text, color) {{
+  judgment = {{ text, color, alpha: 1.0 }};
+}}
+
+function registerHit(ev, dist) {{
+  hitSet.add(ev.t);
+  combo++; hits++;
+  for (let c = 0; c < 4; c++) if (ev.arrows[c]) recFlash[c] = 8;
+  updateStats();
+  showJudgment(dist <= PERFECT_WIN ? 'PERFECT' : 'GOOD',
+               dist <= PERFECT_WIN ? '#f1c40f'  : '#50fa7b');
+}}
+
+function registerMiss(ev) {{
+  missSet.add(ev.t);
+  combo = 0; misses++;
+  updateStats();
+  showJudgment('MISS', '#ff5555');
+}}
+
+document.addEventListener('keydown', e => {{
+  if (!(e.key in KEY_TO_COL)) return;
+  e.preventDefault();
+  if (!playing) return;
+  const col = KEY_TO_COL[e.key];
+  let best = null, bestDist = Infinity;
+  for (const ev of events) {{
+    if (hitSet.has(ev.t) || missSet.has(ev.t)) continue;
+    if (!ev.arrows[col]) continue;
+    const dist = Math.abs(ev.t_sec - t);
+    if (ev.t_sec > t + GOOD_WIN) break;
+    if (dist <= GOOD_WIN && dist < bestDist) {{ bestDist = dist; best = ev; }}
+  }}
+  if (best !== null) registerHit(best, bestDist);
+}});
+
 function draw() {{
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, W, H);
@@ -376,31 +427,41 @@ function draw() {{
   // receptors
   for (let c = 0; c < 4; c++) drawReceptor(c);
 
-  // arrows — only those in visible window
+  // arrows
   const visTop    = t - ARROW_SIZE / pps();
   const visBottom = t + (H + ARROW_SIZE * 2) / pps();
 
   for (const ev of events) {{
-    if (ev.t_sec < visTop)    continue;
+    if (ev.t_sec < visTop - MISS_PASS) continue;
     if (ev.t_sec > visBottom) break;
-    const y = eventY(ev.t_sec);
 
-    // fire flash when crossing hit zone
-    if (!firedSet.has(ev.t) && y >= HIT_Y - 8 && y <= HIT_Y + 32) {{
-      firedSet.add(ev.t);
-      for (let c = 0; c < 4; c++) if (ev.arrows[c]) recFlash[c] = 6;
-      combo++; hits++;
-      document.getElementById('stat-combo').textContent = combo;
-      document.getElementById('stat-hits').textContent  = hits;
+    // auto-miss notes that scrolled past without a keypress
+    if (!hitSet.has(ev.t) && !missSet.has(ev.t) && t - ev.t_sec > MISS_PASS) {{
+      registerMiss(ev);
+      continue;
     }}
 
-    // fade out after hit zone
+    // don't render hit or missed notes
+    if (hitSet.has(ev.t) || missSet.has(ev.t)) continue;
+
+    const y = eventY(ev.t_sec);
     const alpha = y > HIT_Y + 10
       ? Math.max(0, 1 - (y - HIT_Y - 10) / 50)
       : 1.0;
-
     const color = noteColor(ev.pos);
     for (let c = 0; c < 4; c++) if (ev.arrows[c]) drawArrow(c, y, alpha, color);
+  }}
+
+  // judgment text
+  if (judgment.alpha > 0) {{
+    ctx.globalAlpha = judgment.alpha;
+    ctx.fillStyle = judgment.color;
+    ctx.font = 'bold 22px Inter, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = judgment.color; ctx.shadowBlur = 12;
+    ctx.fillText(judgment.text, W / 2, HIT_Y - 52);
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    judgment.alpha = Math.max(0, judgment.alpha - 0.035);
   }}
 
   for (let c = 0; c < 4; c++) if (recFlash[c] > 0) recFlash[c]--;
@@ -437,13 +498,15 @@ function togglePlay() {{
 }}
 
 function resetViz() {{
-  playing = false; t = 0; combo = 0; hits = 0;
-  firedSet.clear(); recFlash = [0,0,0,0];
+  playing = false; t = 0; combo = 0; hits = 0; misses = 0;
+  hitSet.clear(); missSet.clear(); recFlash = [0,0,0,0];
+  judgment = {{ text: '', color: '#ffffff', alpha: 0 }};
   {audio_reset_call}
   document.getElementById('btn-play').textContent = '▶ PLAY';
   document.getElementById('btn-play').classList.remove('playing');
-  document.getElementById('stat-combo').textContent = '0';
-  document.getElementById('stat-hits').textContent  = '0';
+  document.getElementById('stat-combo').textContent   = '0';
+  document.getElementById('stat-hits').textContent    = '0';
+  document.getElementById('stat-misses').textContent  = '0';
   document.getElementById('prog').style.width = '0%';
   document.getElementById('beat-lbl').textContent = 'BEAT 0';
   for (let i = 0; i < 4; i++) document.getElementById('d'+i).classList.remove('on');

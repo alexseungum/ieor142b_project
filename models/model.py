@@ -402,7 +402,14 @@ class DDRLoss(nn.Module):
         if mask.any():
             arrow_logits_masked = arrow_logits[mask]   # (N_active, 4)
             y_masked = self.smooth(y[mask])            # (N_active, 4)
-            arrow_loss = F.binary_cross_entropy_with_logits(arrow_logits_masked, y_masked)
+            # pos_weight mirrors the step-loss treatment: arrows are ~25-40% active
+            # per slot at active steps, so without it the optimal BCE logit sits
+            # below 0.5 and exact_match collapses to 0.
+            arrow_active_frac = y_masked.mean(dim=0).clamp(0.01, 0.99).detach()  # (4,)
+            arrow_pos_weight  = (1 - arrow_active_frac) / arrow_active_frac      # (4,)
+            arrow_loss = F.binary_cross_entropy_with_logits(
+                arrow_logits_masked, y_masked, pos_weight=arrow_pos_weight
+            )
         else:
             arrow_loss = torch.tensor(0.0, device=step_logits.device)
 
