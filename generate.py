@@ -76,7 +76,6 @@ def main():
     p.add_argument('--audio',      type=str, required=True,  help='Input audio file (.mp3/.ogg/.wav)')
     p.add_argument('--checkpoint', type=str, required=True,  help='Path to trained model checkpoint')
     p.add_argument('--difficulty', type=int, default=2,      help='Difficulty level 0-4')
-    p.add_argument('--threshold',  type=float, default=0.5,  help='Step placement threshold (lower=more steps)')
     p.add_argument('--temperature',type=float, default=1.0,  help='Arrow sampling temperature (>1=more diverse)')
     p.add_argument('--output',     type=str, default='output_chart', help='Output directory/prefix')
     p.add_argument('--bpm',        type=float, required=True, help='Song BPM (check the .sm/.ssc file or a BPM detector)')
@@ -111,11 +110,10 @@ def main():
     print(f"  Input shape: {X.shape}")
 
     # Generate
-    print(f"Generating chart (difficulty={args.difficulty}, threshold={args.threshold})...")
+    print(f"Generating chart (difficulty={args.difficulty}, temperature={args.temperature})...")
     step_mask, arrow_preds, step_probs = generate_chart(
         model, X, subdiv_types,
         difficulty=args.difficulty,
-        step_threshold=args.threshold,
         temperature=args.temperature,
         device=device,
     )
