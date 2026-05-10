@@ -3,16 +3,27 @@ model.py
 CNN + Transformer encoder-decoder for DDR chart generation.
 
 Architecture:
-  Encoder:
-    1. Local CNN   : extracts rhythmic features from mel context windows
-    2. Positional encoding
-    3. Transformer encoder : attends over the full sequence
-    4. Difficulty + subdivision embeddings
-  Decoder:
-    5. StepContextEmbedding : arrow combo + delta_subdiv (right-shifted) + beat_phase (current)
-    6. Causal self-attention with 16-step lookback window
-    7. Cross-attention over encoder audio features
-    8. Step head + Arrow head : jointly predict step placement and directions
+  Encoder (bidirectional, full chunk at once):
+    1. Local CNN              : 2D conv over mel context window (15 frames × 80 mels) → d_model=512
+    2. Sinusoidal positional encoding
+    3. Difficulty embedding + subdivision embedding (4th/8th/12th/16th note type)
+    4. Arrow history embedding : right-shifted GT arrows via Linear(4→512), 10% token dropout
+    5. 4-layer bidirectional transformer (d_model=512, 8 heads, d_ff=1024)
+    6. Step head              : Linear(512→64)→ReLU→Linear(64→1) → step placement logits
+
+  Decoder (autoregressive, causal):
+    7. StepContextEmbedding   : right-shifted arrows + delta since last step + beat phase → d_model=512
+                                10% token dropout
+    8. 2-layer causal transformer with full-sequence causal self-attention + cross-attention to encoder
+    9. Arrow head             : Linear(512→64)→ReLU→Linear(64→16) → 16-class combo logits
+
+  Loss:
+    - Step : BCE with label smoothing + dynamic pos_weight
+    - Arrow: 16-class cross-entropy with per-batch inverse-frequency class weights
+
+  Inference:
+    Overlapping chunks (size=768, stride=384). Encoder runs once per chunk with accumulated
+    arrow history. Decoder generates arrows autoregressively token by token.
 """
 
 import math
@@ -433,7 +444,6 @@ def generate_chart(
     X: torch.Tensor,                    # (1, T, context_len, n_mels)
     subdiv_types: torch.Tensor,         # (1, T) subdivision types
     difficulty: int = 2,
-    step_threshold: float = 0.5,
     temperature: float = 1.0,           # >1 = more diverse arrows, <1 = sharper/greedier
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -496,7 +506,7 @@ def generate_chart(
         for t in range(gen_start_pos, gen_end_pos):
             al       = model.decoder(arrows, encoder_out)
             prob     = torch.sigmoid(step_logits_chunk[:, t, 0]).item()
-            has_step = prob > step_threshold
+            has_step = torch.bernoulli(torch.tensor(prob)).bool().item()
             global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
             step_probs[global_t]  = prob
             step_mask[global_t]   = has_step
