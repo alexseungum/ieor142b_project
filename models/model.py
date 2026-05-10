@@ -505,7 +505,7 @@ def generate_chart(
 
         for t in range(gen_start_pos, gen_end_pos):
             al       = model.decoder(arrows, encoder_out)
-            prob     = torch.sigmoid(step_logits_chunk[:, t, 0]).item()
+            prob     = torch.sigmoid(step_logits_chunk[:, t, 0] / temperature).item()
             has_step = torch.bernoulli(torch.tensor(prob)).bool().item()
             global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
             step_probs[global_t]  = prob
