@@ -226,7 +226,7 @@ class ArrowDecoder(nn.Module):
         ])
         self.norm = nn.LayerNorm(d_model)
         self.arrow_head = nn.Sequential(
-            nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 4)
+            nn.Linear(d_model, 64), nn.ReLU(), nn.Linear(64, 16)
         )
 
     def forward(self, arrows_gt: torch.Tensor,
@@ -370,7 +370,7 @@ class DDRLoss(nn.Module):
     """
     Combined loss:
       - Step placement: BCE with label smoothing + positive weight (steps are rare)
-      - Arrow selection: BCE with label smoothing (multi-label)
+      - Arrow selection: 16-class cross-entropy over all arrow combinations
     """
     def __init__(
         self,
@@ -384,45 +384,38 @@ class DDRLoss(nn.Module):
         self.step_weight = step_weight
 
     def smooth(self, target: torch.Tensor) -> torch.Tensor:
-        """Apply label smoothing: shift labels away from 0/1."""
         eps = self.label_smoothing
         return target * (1 - eps) + eps * 0.5
 
     def forward(
         self,
         step_logits:  torch.Tensor,   # (B, T, 1)
-        arrow_logits: torch.Tensor,   # (B, T, 4)
+        arrow_logits: torch.Tensor,   # (B, T, 16)
         y:            torch.Tensor,   # (B, T, 4) ground truth
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         # Step target: 1 if any arrow is active
         step_target = (y.sum(-1, keepdim=True) > 0).float()  # (B, T, 1)
-        step_target_smooth = self.smooth(step_target)
 
-        # Dynamic pos_weight: balances step/no-step ratio per batch so dense
-        # hard charts don't get over-penalised relative to sparse easy charts
         density    = step_target.mean().clamp(0.01, 0.99)
         pos_weight = ((1 - density) / density).to(step_logits.device)
 
         step_loss = F.binary_cross_entropy_with_logits(
             step_logits,
-            step_target_smooth,
+            self.smooth(step_target),
             pos_weight=pos_weight,
         )
 
-        # Arrow loss (only on timesteps where a step occurs in ground truth)
+        # Arrow loss: 16-class cross-entropy only at active step positions
         mask = step_target.squeeze(-1).bool()   # (B, T)
         if mask.any():
-            arrow_logits_masked = arrow_logits[mask]   # (N_active, 4)
-            y_masked = self.smooth(y[mask])            # (N_active, 4)
-            # pos_weight mirrors the step-loss treatment: arrows are ~25-40% active
-            # per slot at active steps, so without it the optimal BCE logit sits
-            # below 0.5 and exact_match collapses to 0.
-            arrow_active_frac = y_masked.mean(dim=0).clamp(0.01, 0.99).detach()  # (4,)
-            arrow_pos_weight  = (1 - arrow_active_frac) / arrow_active_frac      # (4,)
-            arrow_loss = F.binary_cross_entropy_with_logits(
-                arrow_logits_masked, y_masked, pos_weight=arrow_pos_weight
-            )
+            bits = torch.tensor([8, 4, 2, 1], device=y.device, dtype=torch.float32)
+            arrow_targets = (y[mask] * bits).sum(-1).long()    # (N_active,) in [1,15]
+            # Inverse-frequency class weights so rare combos (jumps, hands) aren't ignored
+            counts = torch.bincount(arrow_targets, minlength=16).float().clamp(min=1)
+            class_weights = (1.0 / counts)
+            class_weights = class_weights / class_weights.sum() * 16  # keep scale stable
+            arrow_loss = F.cross_entropy(arrow_logits[mask], arrow_targets, weight=class_weights)
         else:
             arrow_loss = torch.tensor(0.0, device=step_logits.device)
 
@@ -508,10 +501,13 @@ def generate_chart(
             step_probs[global_t]  = prob
             step_mask[global_t]   = has_step
             if has_step:
-                logits    = al[0, t, :] / temperature
-                predicted = torch.bernoulli(torch.sigmoid(logits))
-                if predicted.sum() == 0:
-                    predicted[torch.sigmoid(logits).argmax()] = 1.0
+                logits    = al[0, t, :] / temperature           # (16,)
+                probs     = torch.softmax(logits, dim=-1)
+                combo_idx = torch.multinomial(probs, 1).item()
+                if combo_idx == 0:                              # all-zero invalid at step
+                    combo_idx = probs[1:].argmax().item() + 1
+                bits      = torch.tensor([8, 4, 2, 1], device=device, dtype=torch.long)
+                predicted = ((combo_idx & bits) > 0).float()
                 arrows[0, t, :] = predicted
                 arrows_np[global_t]   = predicted.cpu().numpy()
                 arrow_preds[global_t] = predicted.long().cpu().numpy()

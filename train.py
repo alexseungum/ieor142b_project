@@ -48,17 +48,15 @@ def compute_f1(step_logits, y, threshold=0.5):
     return f1, precision, recall
 
 
-def compute_arrow_acc(arrow_logits, y, threshold=0.5):
-    """
-    Arrow accuracy at timesteps where a step actually occurs (ground truth).
-    - exact_match: fraction of active timesteps where all 4 arrows are correct
-    """
-    mask = (y.sum(-1) > 0)          # (B, T) — only score where steps exist
+def compute_arrow_acc(arrow_logits, y):
+    """Exact-match accuracy over 16 arrow combinations at active step positions."""
+    mask = (y.sum(-1) > 0)
     if not mask.any():
         return 0.0
-    preds   = (torch.sigmoid(arrow_logits[mask]) > threshold)  # (N, 4)
-    targets = y[mask].bool()                                    # (N, 4)
-    return (preds == targets).all(dim=-1).float().mean().item()
+    bits    = torch.tensor([8, 4, 2, 1], device=y.device, dtype=torch.float32)
+    targets = (y[mask] * bits).sum(-1).long()       # (N,) class in [1,15]
+    preds   = arrow_logits[mask].argmax(dim=-1)     # (N,)
+    return (preds == targets).float().mean().item()
 
 
 # ─────────────────────────────────────────────
@@ -82,10 +80,11 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler=None, epoch=
         if ss_ratio > 0:
             with torch.no_grad():
                 _, arrow_logits_tf = model(X, diff, subdiv_types, y)
-            arrow_preds = (torch.sigmoid(arrow_logits_tf) > 0.5).float()
-            # Per-timestep coin flip: True = use model prediction, False = use GT
-            use_pred = (torch.rand(y.shape[0], y.shape[1], 1, device=device) < ss_ratio)
-            arrows_in = torch.where(use_pred, arrow_preds, y)
+            combo_idx  = arrow_logits_tf.argmax(dim=-1)                          # (B, T)
+            bits       = torch.tensor([8, 4, 2, 1], device=device, dtype=torch.float32)
+            arrow_preds = ((combo_idx.unsqueeze(-1) & bits.long()) > 0).float()  # (B, T, 4)
+            use_pred   = (torch.rand(y.shape[0], y.shape[1], 1, device=device) < ss_ratio)
+            arrows_in  = torch.where(use_pred, arrow_preds, y)
         else:
             arrows_in = y
 
@@ -135,9 +134,11 @@ def eval_epoch(model, loader, criterion, device, ss_ratio=0.0):
 
         if ss_ratio > 0:
             _, arrow_logits_gt = model(X, diff, subdiv_types, y)
-            arrow_preds = (torch.sigmoid(arrow_logits_gt) > 0.5).float()
-            use_pred = (torch.rand(y.shape[0], y.shape[1], 1, device=device) < ss_ratio)
-            arrows_in = torch.where(use_pred, arrow_preds, y)
+            combo_idx   = arrow_logits_gt.argmax(dim=-1)
+            bits        = torch.tensor([8, 4, 2, 1], device=device, dtype=torch.float32)
+            arrow_preds = ((combo_idx.unsqueeze(-1) & bits.long()) > 0).float()
+            use_pred    = (torch.rand(y.shape[0], y.shape[1], 1, device=device) < ss_ratio)
+            arrows_in   = torch.where(use_pred, arrow_preds, y)
         else:
             arrows_in = y
 
