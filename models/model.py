@@ -445,6 +445,7 @@ def generate_chart(
     subdiv_types: torch.Tensor,         # (1, T) subdivision types
     difficulty: int = 2,
     temperature: float = 1.0,           # >1 = more diverse arrows, <1 = sharper/greedier
+    threshold: float = 0.5,             # step placement decision boundary
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -505,8 +506,8 @@ def generate_chart(
 
         for t in range(gen_start_pos, gen_end_pos):
             al       = model.decoder(arrows, encoder_out)
-            prob     = torch.sigmoid(step_logits_chunk[:, t, 0] / temperature).item()
-            has_step = torch.bernoulli(torch.tensor(prob)).bool().item()
+            prob     = torch.sigmoid(step_logits_chunk[:, t, 0]).item()
+            has_step = prob > threshold
             global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
             step_probs[global_t]  = prob
             step_mask[global_t]   = has_step
