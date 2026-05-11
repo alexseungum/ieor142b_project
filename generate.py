@@ -197,6 +197,82 @@ def generate_seeded(model, song: dict, device, temperature: float = 1.2,
     return step_mask, arrow_preds, step_probs, seed_cutoff
 
 
+@torch.no_grad()
+def generate_no_ar(model, song: dict, device, temperature: float = 1.2,
+                   threshold: float = 0.5, subdiv_scales: list = None):
+    """
+    Ablation: decoder runs once per chunk on all-zeros arrow history instead of
+    token-by-token. Removes autoregressive feedback while keeping the decoder's
+    cross-attention to the encoder. Step placement is identical to the full model.
+    Returns (step_mask, arrow_preds, step_probs).
+    """
+    import torch as _torch
+    if subdiv_scales is None:
+        subdiv_scales = [1.0, 0.60, 0.50, 0.45]
+    subdiv_thresh = [threshold * s for s in subdiv_scales]
+
+    model.eval()
+    model.to(device)
+
+    mel  = song['mel']
+    bf   = song['beat_frames']
+    st   = song['subdiv_types']
+    diff = _torch.tensor([song['difficulty']], dtype=_torch.long, device=device)
+
+    STRIDE   = SEQ_LEN // 2
+    n_chunks = len(bf) // STRIDE
+    T_total  = n_chunks * STRIDE
+
+    step_mask   = np.zeros(T_total, dtype=bool)
+    step_probs  = np.zeros(T_total, dtype=np.float32)
+    arrow_preds = np.zeros((T_total, 4), dtype=np.int64)
+
+    ctx     = CONTEXT
+    mel_f32 = np.pad(mel.astype(np.float32), ((0, 0), (ctx, ctx)))
+
+    for chunk_idx in range(n_chunks):
+        if chunk_idx == 0:
+            enc_start, enc_end = 0, SEQ_LEN
+        else:
+            enc_start = (chunk_idx - 1) * STRIDE
+            enc_end   = enc_start + SEQ_LEN
+        if enc_end > len(bf):
+            break
+
+        bf_c      = bf[enc_start:enc_end]
+        st_c      = st[enc_start:enc_end]
+        gen_start = 0      if chunk_idx == 0 else STRIDE
+        gen_end   = STRIDE if chunk_idx == 0 else SEQ_LEN
+
+        col_idx = bf_c[:, None] + np.arange(-ctx, ctx + 1)[None, :]
+        X_np    = mel_f32[:, col_idx].transpose(1, 2, 0)
+        X_dev   = _torch.from_numpy(X_np).unsqueeze(0).to(device)
+        st_dev  = _torch.from_numpy(st_c).unsqueeze(0).to(device)
+
+        encoder_out       = model.encode(X_dev, diff, st_dev)
+        step_logits_chunk = model.step_head(encoder_out)
+        # Single decoder forward pass — zeros arrow history, no token-by-token loop
+        al = model.decoder(_torch.zeros(1, SEQ_LEN, 4, device=device), encoder_out)
+
+        for t in range(gen_start, gen_end):
+            prob     = _torch.sigmoid(step_logits_chunk[0, t, 0]).item()
+            stype    = int(st_c[t])
+            global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
+            step_probs[global_t] = prob
+            if prob > subdiv_thresh[stype]:
+                step_mask[global_t] = True
+                logits    = al[0, t, :] / temperature
+                probs_16  = _torch.softmax(logits, dim=-1)
+                combo_idx = _torch.multinomial(probs_16, 1).item()
+                if combo_idx == 0:
+                    combo_idx = probs_16[1:].argmax().item() + 1
+                bits = _torch.tensor([8, 4, 2, 1], device=device, dtype=_torch.long)
+                arrow_preds[global_t] = ((combo_idx & bits) > 0).long().cpu().numpy()
+
+    arrow_preds[~step_mask] = 0
+    return step_mask, arrow_preds, step_probs
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--audio',      type=str, required=True,  help='Input audio file (.mp3/.ogg/.wav)')

@@ -518,20 +518,34 @@ def scan_song_dirs(data_root: str) -> Tuple[List, List, Dict]:
     return usable_pairs, no_audio_dirs, dict(pack_stats)
 
 
-def find_audio_for_title(data_root: str, title: str) -> Tuple[Optional[str], float, float]:
+def find_audio_for_title(data_root: str, title: str,
+                         pack_name: str = '') -> Tuple[Optional[str], float, float]:
     """
     Search data_root for audio matching the given song title.
     Returns (audio_path_or_None, bpm, offset).
+    If pack_name is given, that pack subdirectory is searched first.
     Phase 1: exact title match in .sm/.ssc. Phase 2: fuzzy folder name match.
     """
     audio_exts = {'.mp3', '.ogg', '.wav'}
     root       = Path(data_root)
 
+    # Search the specified pack first, then fall back to all packs
+    pack_dir = root / pack_name if pack_name else None
+    search_roots = ([pack_dir] if pack_dir and pack_dir.exists() else []) + [root]
+
     def _norm(s): return s.lower().strip()
 
     bpm, offset = 120.0, 0.0
 
-    for chart_path in list(root.rglob('*.[sS][mM]')) + list(root.rglob('*.[sS][sS][cC]')):
+    seen = set()
+    chart_candidates = []
+    for sr in search_roots:
+        for p in list(sr.rglob('*.[sS][mM]')) + list(sr.rglob('*.[sS][sS][cC]')):
+            if p not in seen:
+                seen.add(p)
+                chart_candidates.append(p)
+
+    for chart_path in chart_candidates:
         try:
             text = chart_path.read_text(errors='ignore')
             for line in text.splitlines():
@@ -561,13 +575,14 @@ def find_audio_for_title(data_root: str, title: str) -> Tuple[Optional[str], flo
     # Fuzzy fallback: match words in folder name
     words = [w for w in _norm(title).split() if len(w) > 3]
     if words:
-        for song_dir in root.rglob('*'):
-            if not song_dir.is_dir():
-                continue
-            if any(w in _norm(song_dir.name) for w in words):
-                for f in song_dir.iterdir():
-                    if f.suffix.lower() in audio_exts:
-                        return str(f), bpm, offset
+        for sr in search_roots:
+            for song_dir in sr.rglob('*'):
+                if not song_dir.is_dir():
+                    continue
+                if any(w in _norm(song_dir.name) for w in words):
+                    for f in song_dir.iterdir():
+                        if f.suffix.lower() in audio_exts:
+                            return str(f), bpm, offset
 
     return None, bpm, offset
 
