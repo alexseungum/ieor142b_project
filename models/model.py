@@ -541,3 +541,23 @@ def generate_chart(
                 arrow_preds[global_t] = predicted.long().cpu().numpy()
 
     return step_mask, arrow_preds, step_probs
+
+
+def load_model(ckpt_path: str, device: str = None) -> Tuple[DDRTransformer, dict]:
+    """Load a trained DDRTransformer from a checkpoint. Returns (model, ckpt_dict)."""
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    ckpt  = torch.load(ckpt_path, map_location=device)
+    args  = ckpt.get('args', {})
+    model = DDRTransformer(
+        d_model=args.get('d_model', 512),
+        nhead=args.get('nhead', 8),
+        num_encoder_layers=args.get('n_layers', 4),
+        dim_feedforward=args.get('d_ff', 1024),
+        dropout=0.0,
+    ).to(device)
+    state = ckpt['model_state']
+    state.pop('pos_enc.pe', None)
+    model.load_state_dict(state, strict=False)
+    model.eval()
+    return model, ckpt

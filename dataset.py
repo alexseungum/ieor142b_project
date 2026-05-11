@@ -169,6 +169,65 @@ class DDRDataset(Dataset):
     def __len__(self):
         return len(self.chunks)
 
+
+def build_cache(data_root: str, cache_dir: str, n_workers: int = 2) -> int:
+    """
+    Build base_train.pkl and base_val.pkl in cache_dir if they don't already exist.
+    Returns number of samples cached (0 if already existed).
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    base_train = os.path.join(cache_dir, 'base_train.pkl')
+    base_val   = os.path.join(cache_dir, 'base_val.pkl')
+
+    if os.path.exists(base_train) and os.path.exists(base_val):
+        with open(base_train, 'rb') as f:
+            n = len(pickle.load(f))
+        print(f"Cache already exists — skipping build.")
+        print(f"  base_train.pkl : {os.path.getsize(base_train)/1e9:.2f} GB  ({n} samples)")
+        print(f"  base_val.pkl   : {os.path.getsize(base_val)/1e9:.2f} GB")
+        return 0
+
+    root       = Path(data_root)
+    audio_exts = {'.ogg', '.mp3', '.wav'}
+    all_sm     = list(root.rglob('*.sm'))
+    all_ssc    = list(root.rglob('*.ssc'))
+    song_dirs  = sorted({f.parent for f in all_sm + all_ssc})
+
+    pairs = []
+    for song_dir in song_dirs:
+        sm_f  = list(song_dir.glob('*.sm'))
+        ssc_f = list(song_dir.glob('*.ssc'))
+        audio = [f for f in song_dir.iterdir() if f.suffix.lower() in audio_exts]
+        chart = sm_f if sm_f else ssc_f
+        if chart and audio:
+            pairs.append((str(audio[0]), str(chart[0])))
+
+    print(f"Building cache for {len(pairs)} songs with {n_workers} workers...")
+    print("This takes ~10-20 min on first run.")
+
+    from multiprocessing import Pool
+    samples = []
+    failed  = 0
+    with Pool(n_workers) as pool:
+        for i, result in enumerate(pool.imap_unordered(_process_song, pairs)):
+            samples.extend(result)
+            if not result:
+                failed += 1
+            if (i + 1) % 10 == 0 or (i + 1) == len(pairs):
+                print(f"  [{i+1}/{len(pairs)}] {len(samples)} samples built"
+                      + (f"  ({failed} skipped)" if failed else ""))
+
+    if failed:
+        print(f"\n{failed} songs skipped (corrupt audio/chart or no dance-single chart)")
+
+    print("Saving to Drive...")
+    with open(base_train, 'wb') as f:
+        pickle.dump(samples, f)
+    with open(base_val, 'wb') as f:
+        pickle.dump(samples, f)
+    print(f"Saved: {os.path.getsize(base_train)/1e9:.2f} GB per file  ({len(samples)} samples)")
+    return len(samples)
+
     def __getitem__(self, idx):
         bf, mel, y, st, d = self.chunks[idx]
         if mel is not None:

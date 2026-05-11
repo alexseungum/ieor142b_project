@@ -18,11 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils.data_utils import (
     load_audio, extract_mel_spectrogram, N_MELS, CONTEXT_FRAMES
 )
-from config import HOP_LENGTH
+from config import HOP_LENGTH, SEQ_LEN, N_VALID_PER_MEASURE
 from config import SUBDIVISION, VALID_SUBDIV_POSITIONS
 from utils.data_utils import get_subdiv_type
 from utils.sm_writer import write_sm_file
-from models.model import DDRTransformer, generate_chart
+from models.model import DDRTransformer, generate_chart, load_model
 from visualizer import build_chart_json, build_html
 
 
@@ -71,6 +71,132 @@ def audio_to_model_input(audio_path: str, bpm: float, subdivision: int = SUBDIVI
     )
 
 
+def build_chart_data(step_mask, arrow_preds, bpm: float, title: str,
+                     difficulty: int, offset: float = 0.0) -> dict:
+    """Build the chart_data dict consumed by build_html from generation outputs."""
+    DIFF_NAMES   = {0: 'Beginner', 1: 'Easy', 2: 'Medium', 3: 'Hard', 4: 'Challenge'}
+    sec_per_meas = 4 * 60.0 / bpm
+    events = []
+    for t_idx in range(len(step_mask)):
+        if step_mask[t_idx]:
+            arrows = [int(arrow_preds[t_idx, i]) for i in range(4)]
+            if not any(arrows):
+                arrows[t_idx % 4] = 1
+            measure_idx = t_idx // N_VALID_PER_MEASURE
+            pos   = int(VALID_SUBDIV_POSITIONS[t_idx % N_VALID_PER_MEASURE])
+            t_sec = offset + measure_idx * sec_per_meas + pos / SUBDIVISION * sec_per_meas
+            events.append({'t': t_idx, 'pos': pos, 't_sec': round(t_sec, 6), 'arrows': arrows})
+    total_measures = len(step_mask) // N_VALID_PER_MEASURE
+    return {
+        'title':           title,
+        'bpm':             bpm,
+        'offset':          offset,
+        'difficulty':      DIFF_NAMES.get(difficulty, 'Medium'),
+        'meter':           difficulty * 3 + 3,
+        'subdivision':     SUBDIVISION,
+        'total_steps':     int(step_mask.sum()),
+        'total_timesteps': len(step_mask),
+        'total_duration':  round(offset + total_measures * sec_per_meas, 3),
+        'events':          events,
+    }
+
+
+@torch.no_grad()
+def generate_seeded(model, song: dict, device, temperature: float = 1.2,
+                    threshold: float = 0.5, subdiv_scales: list = None,
+                    n_seed: int = 16):
+    """
+    Generate from a cached song dict (mel/beat_frames/y/subdiv_types).
+    Seeds decoder with first n_seed GT steps, then generates autoregressively.
+    Returns (step_mask, arrow_preds, step_probs, seed_cutoff).
+    """
+    import torch as _torch
+    if subdiv_scales is None:
+        subdiv_scales = [1.0, 0.60, 0.50, 0.45]
+    subdiv_thresh = [threshold * s for s in subdiv_scales]
+
+    model.eval()
+    model.to(device)
+
+    mel  = song['mel']
+    bf   = song['beat_frames']
+    y_np = song['y'].astype(np.float32)
+    st   = song['subdiv_types']
+    diff = _torch.tensor([song['difficulty']], dtype=_torch.long, device=device)
+
+    STRIDE   = SEQ_LEN // 2
+    n_chunks = len(bf) // STRIDE
+    T_total  = n_chunks * STRIDE
+
+    step_mask   = np.zeros(T_total, dtype=bool)
+    step_probs  = np.zeros(T_total, dtype=np.float32)
+    arrows_np   = np.zeros((T_total, 4), dtype=np.float32)
+    arrow_preds = np.zeros((T_total, 4), dtype=np.int64)
+    seed_cutoff = 0
+
+    ctx     = CONTEXT
+    mel_f32 = np.pad(mel.astype(np.float32), ((0, 0), (ctx, ctx)))
+
+    for chunk_idx in range(n_chunks):
+        if chunk_idx == 0:
+            enc_start, enc_end = 0, SEQ_LEN
+        else:
+            enc_start = (chunk_idx - 1) * STRIDE
+            enc_end   = enc_start + SEQ_LEN
+        if enc_end > len(bf):
+            break
+
+        bf_c = bf[enc_start:enc_end]
+        y_c  = y_np[enc_start:enc_end]
+        st_c = st[enc_start:enc_end]
+
+        col_idx = bf_c[:, None] + np.arange(-ctx, ctx + 1)[None, :]
+        X_np    = mel_f32[:, col_idx].transpose(1, 2, 0)
+        X_dev   = _torch.from_numpy(X_np).unsqueeze(0).to(device)
+        st_dev  = _torch.from_numpy(st_c).unsqueeze(0).to(device)
+        arrows  = _torch.zeros(1, SEQ_LEN, 4, device=device)
+
+        if chunk_idx == 0:
+            gt_step_pos = np.where(y_c.sum(-1) > 0)[0]
+            seed_pos    = [p for p in gt_step_pos if p < STRIDE][:n_seed]
+            seed_cutoff = int(seed_pos[-1]) + 1 if (n_seed > 0 and len(seed_pos) >= n_seed) else 0
+            for p in seed_pos:
+                arrows[0, p, :] = _torch.from_numpy(y_c[p]).to(device)
+                step_mask[p]    = True
+                arrows_np[p]    = y_c[p]
+            gen_start, gen_end = seed_cutoff, STRIDE
+        else:
+            prev_s = (chunk_idx - 1) * STRIDE
+            prev_e = chunk_idx * STRIDE
+            arrows[0, :STRIDE, :] = _torch.from_numpy(arrows_np[prev_s:prev_e]).to(device)
+            gen_start, gen_end = STRIDE, SEQ_LEN
+
+        encoder_out       = model.encode(X_dev, diff, st_dev)
+        step_logits_chunk = model.step_head(encoder_out)
+
+        for t in range(gen_start, gen_end):
+            al       = model.decoder(arrows, encoder_out)
+            prob     = _torch.sigmoid(step_logits_chunk[0, t, 0]).item()
+            stype    = int(st_c[t])
+            global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
+            step_probs[global_t] = prob
+            if prob > subdiv_thresh[stype]:
+                step_mask[global_t] = True
+                logits    = al[0, t, :] / temperature
+                probs_16  = _torch.softmax(logits, dim=-1)
+                combo_idx = _torch.multinomial(probs_16, 1).item()
+                if combo_idx == 0:
+                    combo_idx = probs_16[1:].argmax().item() + 1
+                bits = _torch.tensor([8, 4, 2, 1], device=device, dtype=_torch.long)
+                pred = ((combo_idx & bits) > 0).float()
+                arrows[0, t, :] = pred
+                arrows_np[global_t]   = pred.cpu().numpy()
+                arrow_preds[global_t] = pred.long().cpu().numpy()
+
+    arrow_preds[~step_mask] = 0
+    return step_mask, arrow_preds, step_probs, seed_cutoff
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--audio',      type=str, required=True,  help='Input audio file (.mp3/.ogg/.wav)')
@@ -88,21 +214,8 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
-    # Load model
     print(f"Loading checkpoint: {args.checkpoint}")
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    model_args = ckpt.get('args', {})
-
-    model = DDRTransformer(
-        d_model=model_args.get('d_model', 256),
-        nhead=model_args.get('nhead', 8),
-        num_encoder_layers=model_args.get('n_layers', 4),
-        dim_feedforward=model_args.get('d_ff', 1024),
-        dropout=0.0,  # no dropout at inference
-    )
-    state_dict = ckpt['model_state']
-    state_dict.pop('pos_enc.pe', None)
-    model.load_state_dict(state_dict, strict=False)
+    model, ckpt = load_model(args.checkpoint, device=device)
     print(f"  Loaded (val F1 at save: {ckpt.get('val_f1', 'N/A')})")
 
     bpm = args.bpm
@@ -151,50 +264,19 @@ def main():
     import shutil
     shutil.copy(args.audio, f"{args.output}/{audio_name}")
 
-    # Generate visualizer HTML directly from arrays (bypass sm round-trip)
+    # Visualizer
     print("Generating visualizer...")
     try:
-        import json as _json
         import base64
-        from config import N_VALID_PER_MEASURE, VALID_SUBDIV_POSITIONS as _VSP
-        DIFFICULTY_NAMES = {0: 'Beginner', 1: 'Easy', 2: 'Medium', 3: 'Hard', 4: 'Challenge'}
-        audio_t0 = 0.0  # no SM offset for user-provided audio
-        sec_per_meas = 4 * 60.0 / bpm
-        events = []
-        for t_idx in range(len(step_mask)):
-            if step_mask[t_idx]:
-                arrows = [int(arrow_preds[t_idx, i]) for i in range(4)]
-                if not any(arrows):
-                    arrows[t_idx % 4] = 1
-                measure_idx = t_idx // N_VALID_PER_MEASURE
-                pos = int(_VSP[t_idx % N_VALID_PER_MEASURE])
-                t_sec = audio_t0 + measure_idx * sec_per_meas + pos / SUBDIVISION * sec_per_meas
-                events.append({'t': t_idx, 'pos': pos, 't_sec': round(t_sec, 6), 'arrows': arrows})
-
-        total_measures = len(step_mask) // N_VALID_PER_MEASURE
-        total_duration = audio_t0 + total_measures * sec_per_meas
-        chart_data = {
-            'title': Path(args.audio).stem,
-            'bpm': bpm,
-            'offset': audio_t0,
-            'difficulty': DIFFICULTY_NAMES.get(args.difficulty, 'Medium'),
-            'meter': args.difficulty * 3 + 3,
-            'subdivision': SUBDIVISION,
-            'total_steps': int(step_mask.sum()),
-            'total_timesteps': len(step_mask),
-            'total_duration': round(total_duration, 3),
-            'events': events,
-        }
-
-        # Embed audio as base64 so the HTML is fully self-contained
-        suffix = Path(args.audio).suffix.lower()
-        mime_map = {'.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav'}
-        audio_mime = mime_map.get(suffix, 'audio/mpeg')
+        chart_data = build_chart_data(step_mask, arrow_preds, bpm=bpm,
+                                      title=Path(args.audio).stem,
+                                      difficulty=args.difficulty, offset=0.0)
+        suffix    = Path(args.audio).suffix.lower()
+        mime_map  = {'.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav'}
         with open(args.audio, 'rb') as af:
             audio_b64 = base64.b64encode(af.read()).decode('utf-8')
-        audio_data_uri = f"data:{audio_mime};base64,{audio_b64}"
-
-        print(f"  Visualizer: {chart_data['total_steps']} steps, {len(events)} events")
+        audio_data_uri = f"data:{mime_map.get(suffix, 'audio/mpeg')};base64,{audio_b64}"
+        print(f"  Visualizer: {chart_data['total_steps']} steps, {len(chart_data['events'])} events")
         html = build_html(chart_data, audio_data_uri=audio_data_uri)
         viz_path = f"{args.output}/visualizer.html"
         with open(viz_path, 'w') as f:

@@ -441,3 +441,145 @@ def build_sample(
         'difficulty':   diff_int,
         'title':        sm_data['title'],
     }
+
+
+# ─────────────────────────────────────────────
+# DATASET SCANNING & DIAGNOSTICS
+# ─────────────────────────────────────────────
+
+def quick_difficulties(chart_path: str) -> List[str]:
+    """Fast regex scan for dance-single difficulty tags without full parsing."""
+    try:
+        content = open(chart_path, 'r', encoding='utf-8', errors='ignore').read()
+        is_ssc  = chart_path.endswith('.ssc')
+        diffs   = []
+        if is_ssc:
+            types = re.findall(r'#STEPSTYPE\s*:([^;]+);', content, re.IGNORECASE)
+            diffd = re.findall(r'#DIFFICULTY\s*:([^;]+);', content, re.IGNORECASE)
+            for t, d in zip(types, diffd):
+                if 'single' in t.lower():
+                    diffs.append(d.strip().lower())
+        else:
+            for m in re.finditer(r'#NOTES\s*:(.*?)(?=\n[^,\n]|\Z)', content,
+                                  re.DOTALL | re.IGNORECASE):
+                block = m.group(1)
+                lines = [l.strip().rstrip(':') for l in block.split('\n')
+                         if l.strip() and not l.strip().startswith('//')]
+                if len(lines) >= 3 and 'single' in lines[0].lower():
+                    diffs.append(lines[2].lower())
+        return diffs
+    except Exception:
+        return []
+
+
+def scan_song_dirs(data_root: str) -> Tuple[List, List, Dict]:
+    """
+    Recursively find all song directories with a chart + audio file.
+    Returns (usable_pairs, no_audio_dirs, pack_stats).
+      usable_pairs  : list of (audio_path, chart_path, fmt, pack_name)
+      no_audio_dirs : list of song dir paths missing audio
+      pack_stats    : dict[pack] -> {songs, sm, ssc, no_audio, difficulties}
+    """
+    from collections import defaultdict
+    root       = Path(data_root)
+    audio_exts = {'.ogg', '.mp3', '.wav'}
+    all_sm     = list(root.rglob('*.sm'))
+    all_ssc    = list(root.rglob('*.ssc'))
+    song_dirs  = sorted({f.parent for f in all_sm + all_ssc})
+
+    usable_pairs  = []
+    no_audio_dirs = []
+    pack_stats    = defaultdict(lambda: {
+        'songs': 0, 'sm': 0, 'ssc': 0, 'no_audio': 0,
+        'difficulties': defaultdict(int),
+    })
+
+    for song_dir in song_dirs:
+        pack        = song_dir.parent.name
+        sm_files    = list(song_dir.glob('*.sm'))
+        ssc_files   = list(song_dir.glob('*.ssc'))
+        audio_files = [f for f in song_dir.iterdir() if f.suffix.lower() in audio_exts]
+        chart_files = sm_files if sm_files else ssc_files
+        fmt         = 'sm' if sm_files else 'ssc'
+
+        pack_stats[pack]['songs'] += 1
+        pack_stats[pack][fmt]     += 1
+
+        if not audio_files or not chart_files:
+            pack_stats[pack]['no_audio'] += 1
+            no_audio_dirs.append(str(song_dir))
+            continue
+
+        chart_path = str(chart_files[0])
+        usable_pairs.append((str(audio_files[0]), chart_path, fmt, pack))
+        for diff in quick_difficulties(chart_path):
+            pack_stats[pack]['difficulties'][diff] += 1
+
+    return usable_pairs, no_audio_dirs, dict(pack_stats)
+
+
+def find_audio_for_title(data_root: str, title: str) -> Tuple[Optional[str], float, float]:
+    """
+    Search data_root for audio matching the given song title.
+    Returns (audio_path_or_None, bpm, offset).
+    Phase 1: exact title match in .sm/.ssc. Phase 2: fuzzy folder name match.
+    """
+    audio_exts = {'.mp3', '.ogg', '.wav'}
+    root       = Path(data_root)
+
+    def _norm(s): return s.lower().strip()
+
+    bpm, offset = 120.0, 0.0
+
+    for chart_path in list(root.rglob('*.[sS][mM]')) + list(root.rglob('*.[sS][sS][cC]')):
+        try:
+            text = chart_path.read_text(errors='ignore')
+            for line in text.splitlines():
+                if line.upper().startswith('#TITLE:'):
+                    sm_title = line.split(':', 1)[1].rstrip(';').strip()
+                    if _norm(sm_title) == _norm(title):
+                        for tag_line in text.splitlines():
+                            tu = tag_line.upper().lstrip()
+                            if tu.startswith('#BPMS:'):
+                                try:
+                                    bpm = float(tag_line.split(':', 1)[1].split('=')[1]
+                                                .rstrip(';').split(',')[0].strip())
+                                except Exception:
+                                    pass
+                            elif tu.startswith('#OFFSET:'):
+                                try:
+                                    offset = float(tag_line.split(':', 1)[1].rstrip(';').strip())
+                                except Exception:
+                                    pass
+                        for f in chart_path.parent.iterdir():
+                            if f.suffix.lower() in audio_exts:
+                                return str(f), bpm, offset
+                        break
+        except Exception:
+            pass
+
+    # Fuzzy fallback: match words in folder name
+    words = [w for w in _norm(title).split() if len(w) > 3]
+    if words:
+        for song_dir in root.rglob('*'):
+            if not song_dir.is_dir():
+                continue
+            if any(w in _norm(song_dir.name) for w in words):
+                for f in song_dir.iterdir():
+                    if f.suffix.lower() in audio_exts:
+                        return str(f), bpm, offset
+
+    return None, bpm, offset
+
+
+def compute_step_metrics(step_mask: np.ndarray, y_np: np.ndarray, start: int = 0) -> Dict:
+    """Compute step placement F1, precision, recall from position start onwards."""
+    gt   = y_np[start:].sum(-1) > 0
+    pred = step_mask[start:]
+    tp   = int((gt & pred).sum())
+    fp   = int((~gt & pred).sum())
+    fn   = int((gt & ~pred).sum())
+    prec = tp / (tp + fp + 1e-8)
+    rec  = tp / (tp + fn + 1e-8)
+    f1   = 2 * prec * rec / (prec + rec + 1e-8)
+    return {'f1': f1, 'precision': prec, 'recall': rec, 'tp': tp, 'fp': fp, 'fn': fn}
