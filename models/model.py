@@ -394,16 +394,17 @@ class DDRLoss(nn.Module):
         self.arrow_weight = arrow_weight
         self.step_weight = step_weight
 
-        # Static group weights based on typical DDR note distribution:
-        #   singles (~72%, 4 classes): 0.72/4 = 0.180 each  → classes 1,2,4,8
-        #   brackets (~22%, 6 classes): 0.22/6 = 0.037 each → classes 3,5,6,9,10,12
-        #   triples  (~5%,  4 classes): 0.05/4 = 0.013 each → classes 7,11,13,14
-        #   quad     (~1%,  1 class):   0.01   each          → class 15
+        # Static group weights from DDC paper: 84% of steps are single arrows.
+        # Remaining 16% split across brackets/triples/quads (estimated from DDR data).
+        #   singles  (84%, 4 classes): 0.84/4  = 0.210 each → classes 1,2,4,8
+        #   brackets (14%, 6 classes): 0.14/6  = 0.023 each → classes 3,5,6,9,10,12
+        #   triples  (1.5%,4 classes): 0.015/4 = 0.004 each → classes 7,11,13,14
+        #   quad     (0.5%,1 class):   0.005         each   → class 15
         self._arrow_class_weights = torch.zeros(16)
-        self._arrow_class_weights[[1, 2, 4, 8]]         = 0.72 / 4
-        self._arrow_class_weights[[3, 5, 6, 9, 10, 12]] = 0.22 / 6
-        self._arrow_class_weights[[7, 11, 13, 14]]       = 0.05 / 4
-        self._arrow_class_weights[15]                    = 0.01
+        self._arrow_class_weights[[1, 2, 4, 8]]         = 0.84  / 4
+        self._arrow_class_weights[[3, 5, 6, 9, 10, 12]] = 0.14  / 6
+        self._arrow_class_weights[[7, 11, 13, 14]]       = 0.015 / 4
+        self._arrow_class_weights[15]                    = 0.005
 
     def smooth(self, target: torch.Tensor) -> torch.Tensor:
         eps = self.label_smoothing
