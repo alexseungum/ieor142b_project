@@ -508,10 +508,7 @@ def generate_chart(
             gen_start_pos = STRIDE
             gen_end_pos   = SEQ_LEN
 
-        # Re-encode with arrow history so encoder matches training conditioning
-        start_tok = torch.zeros(1, 1, 4, device=device)
-        arrows_shifted = torch.cat([start_tok, arrows[:, :-1, :]], dim=1)
-        encoder_out = model.encode(X_c, diff, st_c, arrows_shifted)
+        encoder_out = model.encode(X_c, diff, st_c)
         step_logits_chunk = model.step_head(encoder_out)
 
         # Per-subdivision thresholds: 8th/12th/16th notes are harder for the model to
