@@ -394,6 +394,19 @@ class DDRLoss(nn.Module):
         self.arrow_weight = arrow_weight
         self.step_weight = step_weight
 
+        # Static group weights based on typical DDR note distribution:
+        #   singles (~72%, 4 classes): 0.72/4 = 0.180 each  → classes 1,2,4,8
+        #   brackets (~22%, 6 classes): 0.22/6 = 0.037 each → classes 3,5,6,9,10,12
+        #   triples  (~5%,  4 classes): 0.05/4 = 0.013 each → classes 7,11,13,14
+        #   quad     (~1%,  1 class):   0.01   each          → class 15
+        w = torch.zeros(16)
+        w[0]                      = 0.0    # invalid — shouldn't appear at active steps
+        w[[1, 2, 4, 8]]           = 0.72 / 4
+        w[[3, 5, 6, 9, 10, 12]]   = 0.22 / 6
+        w[[7, 11, 13, 14]]        = 0.05 / 4
+        w[15]                     = 0.01
+        self.register_buffer('arrow_class_weights', w)
+
     def smooth(self, target: torch.Tensor) -> torch.Tensor:
         eps = self.label_smoothing
         return target * (1 - eps) + eps * 0.5
@@ -422,11 +435,7 @@ class DDRLoss(nn.Module):
         if mask.any():
             bits = torch.tensor([8, 4, 2, 1], device=y.device, dtype=torch.float32)
             arrow_targets = (y[mask] * bits).sum(-1).long()    # (N_active,) in [1,15]
-            # Inverse-frequency class weights so rare combos (jumps, hands) aren't ignored
-            counts = torch.bincount(arrow_targets, minlength=16).float().clamp(min=1)
-            class_weights = (1.0 / counts)
-            class_weights = class_weights / class_weights.sum() * 16  # keep scale stable
-            arrow_loss = F.cross_entropy(arrow_logits[mask], arrow_targets, weight=class_weights)
+            arrow_loss = F.cross_entropy(arrow_logits[mask], arrow_targets, weight=self.arrow_class_weights)
         else:
             arrow_loss = torch.tensor(0.0, device=step_logits.device)
 
