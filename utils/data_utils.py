@@ -598,3 +598,51 @@ def compute_step_metrics(step_mask: np.ndarray, y_np: np.ndarray, start: int = 0
     rec  = tp / (tp + fn + 1e-8)
     f1   = 2 * prec * rec / (prec + rec + 1e-8)
     return {'f1': f1, 'precision': prec, 'recall': rec, 'tp': tp, 'fp': fp, 'fn': fn}
+
+
+def compute_arrow_metrics(step_mask: np.ndarray, arrow_preds: np.ndarray,
+                          y_np: np.ndarray) -> Dict:
+    """
+    Compute arrow quality metrics at true-positive step positions (where both
+    the model and GT agree there is a step). Since step placement is shared
+    between ablation variants, this isolates arrow prediction quality.
+
+    Returns:
+      n_tp          : number of true-positive steps evaluated
+      arrow_exact   : fraction where all 4 arrows exactly match GT
+      per_dir_acc   : (4,) per-direction (L/D/U/R) accuracy
+      pred_combo_dist / gt_combo_dist : fraction of steps that are
+                      single / bracket / triple / quad
+    """
+    gt_mask = y_np.sum(-1) > 0
+    tp_mask = step_mask & gt_mask
+    n_tp    = int(tp_mask.sum())
+
+    if n_tp == 0:
+        return {'n_tp': 0, 'arrow_exact': float('nan'),
+                'per_dir_acc': np.full(4, float('nan')),
+                'pred_combo_dist': {}, 'gt_combo_dist': {}}
+
+    pred_tp = arrow_preds[tp_mask].astype(float)   # (N, 4)
+    gt_tp   = y_np[tp_mask].astype(float)           # (N, 4)
+
+    arrow_exact  = float((pred_tp == gt_tp).all(-1).mean())
+    per_dir_acc  = (pred_tp == gt_tp).mean(0)        # (4,)
+
+    def _combo_dist(arr):
+        n = arr.sum(-1)
+        total = max(len(arr), 1)
+        return {
+            'single':  float((n == 1).sum() / total),
+            'bracket': float((n == 2).sum() / total),
+            'triple':  float((n == 3).sum() / total),
+            'quad':    float((n == 4).sum() / total),
+        }
+
+    return {
+        'n_tp':            n_tp,
+        'arrow_exact':     arrow_exact,
+        'per_dir_acc':     per_dir_acc,
+        'pred_combo_dist': _combo_dist(pred_tp),
+        'gt_combo_dist':   _combo_dist(gt_tp),
+    }
