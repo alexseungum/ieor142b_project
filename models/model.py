@@ -454,7 +454,8 @@ def generate_chart(
     subdiv_types: torch.Tensor,         # (1, T) subdivision types
     difficulty: int = 2,
     temperature: float = 1.0,           # >1 = more diverse arrows, <1 = sharper/greedier
-    threshold: float = 0.5,             # step placement decision boundary
+    threshold: float = 0.5,             # step placement decision boundary (4th notes)
+    subdiv_scales: list = None,         # per-subdivision threshold multipliers [4th, 8th, 12th, 16th]
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -513,10 +514,20 @@ def generate_chart(
         encoder_out = model.encode(X_c, diff, st_c, arrows_shifted)
         step_logits_chunk = model.step_head(encoder_out)
 
+        # Per-subdivision thresholds: 8th/12th/16th notes are harder for the model to
+        # be confident about, so scale the base threshold down for them.
+        #   type 0 = 4th note  → full threshold
+        #   type 1 = 8th note  → 60% of threshold  (default)
+        #   type 2 = 12th note → 50% of threshold  (default)
+        #   type 3 = 16th note → 45% of threshold  (default)
+        scales = subdiv_scales if subdiv_scales is not None else [1.0, 0.60, 0.50, 0.45]
+        subdiv_thresh = [threshold * s for s in scales]
+
         for t in range(gen_start_pos, gen_end_pos):
             al       = model.decoder(arrows, encoder_out)
             prob     = torch.sigmoid(step_logits_chunk[:, t, 0]).item()
-            has_step = prob > threshold
+            stype    = st_c[0, t].item()
+            has_step = prob > subdiv_thresh[stype]
             global_t = t if chunk_idx == 0 else (chunk_idx - 1) * STRIDE + t
             step_probs[global_t]  = prob
             step_mask[global_t]   = has_step

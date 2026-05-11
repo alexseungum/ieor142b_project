@@ -77,7 +77,10 @@ def main():
     p.add_argument('--checkpoint', type=str, required=True,  help='Path to trained model checkpoint')
     p.add_argument('--difficulty', type=int, default=2,      help='Difficulty level 0-4')
     p.add_argument('--temperature',type=float, default=1.0,  help='Arrow sampling temperature (>1=more diverse)')
-    p.add_argument('--threshold',  type=float, default=0.5,  help='Step placement probability threshold')
+    p.add_argument('--threshold',  type=float, default=0.5,  help='Step placement probability threshold (applies to 4th notes)')
+    p.add_argument('--subdiv_scales', type=float, nargs=4, default=[1.0, 0.60, 0.50, 0.45],
+                   metavar=('S4TH', 'S8TH', 'S12TH', 'S16TH'),
+                   help='Threshold multipliers per subdivision type [4th 8th 12th 16th] (default: 1.0 0.60 0.50 0.45)')
     p.add_argument('--output',     type=str, default='output_chart', help='Output directory/prefix')
     p.add_argument('--bpm',        type=float, required=True, help='Song BPM (check the .sm/.ssc file or a BPM detector)')
     args = p.parse_args()
@@ -117,6 +120,7 @@ def main():
         difficulty=args.difficulty,
         temperature=args.temperature,
         threshold=args.threshold,
+        subdiv_scales=args.subdiv_scales,
         device=device,
     )
     n_steps = step_mask.sum()
