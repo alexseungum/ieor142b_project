@@ -399,13 +399,11 @@ class DDRLoss(nn.Module):
         #   brackets (~22%, 6 classes): 0.22/6 = 0.037 each → classes 3,5,6,9,10,12
         #   triples  (~5%,  4 classes): 0.05/4 = 0.013 each → classes 7,11,13,14
         #   quad     (~1%,  1 class):   0.01   each          → class 15
-        w = torch.zeros(16)
-        w[0]                      = 0.0    # invalid — shouldn't appear at active steps
-        w[[1, 2, 4, 8]]           = 0.72 / 4
-        w[[3, 5, 6, 9, 10, 12]]   = 0.22 / 6
-        w[[7, 11, 13, 14]]        = 0.05 / 4
-        w[15]                     = 0.01
-        self.register_buffer('arrow_class_weights', w)
+        self._arrow_class_weights = torch.zeros(16)
+        self._arrow_class_weights[[1, 2, 4, 8]]         = 0.72 / 4
+        self._arrow_class_weights[[3, 5, 6, 9, 10, 12]] = 0.22 / 6
+        self._arrow_class_weights[[7, 11, 13, 14]]       = 0.05 / 4
+        self._arrow_class_weights[15]                    = 0.01
 
     def smooth(self, target: torch.Tensor) -> torch.Tensor:
         eps = self.label_smoothing
@@ -435,7 +433,8 @@ class DDRLoss(nn.Module):
         if mask.any():
             bits = torch.tensor([8, 4, 2, 1], device=y.device, dtype=torch.float32)
             arrow_targets = (y[mask] * bits).sum(-1).long()    # (N_active,) in [1,15]
-            arrow_loss = F.cross_entropy(arrow_logits[mask], arrow_targets, weight=self.arrow_class_weights)
+            w = self._arrow_class_weights.to(arrow_logits.device)
+            arrow_loss = F.cross_entropy(arrow_logits[mask], arrow_targets, weight=w)
         else:
             arrow_loss = torch.tensor(0.0, device=step_logits.device)
 
